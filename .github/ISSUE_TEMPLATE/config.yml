@@ -1,0 +1,16 @@
+# Los issues en blanco quedan habilitados a propósito: una plantilla que no
+# encaja hace que la gente no escriba, y un reporte incompleto vale más que
+# ninguno.
+blank_issues_enabled: true
+contact_links:
+  - name: Un problema de seguridad
+    url: https://github.com/Vasak-OS/.github/blob/main/SECURITY.md
+    about: >
+      No va como issue público. Se reporta en privado desde la pestaña Security
+      del repositorio; acá están los plazos y el alcance.
+  - name: Documentación y guías
+    url: https://os.vasak.net.ar/docs
+    about: Cómo instalar, cómo actualizar y cómo está armado el sistema.
+  - name: En qué estamos trabajando
+    url: https://github.com/orgs/Vasak-OS/projects
+    about: El roadmap, por si lo que ibas a pedir ya está en camino.

@@ -1,0 +1,31 @@
+name: Una mejora
+description: Algo que falta, o que anda y podría andar mejor
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problema
+    attributes:
+      label: Qué problema resuelve
+      description: >
+        Empezá por lo que hoy no se puede hacer o cuesta, no por la solución.
+        Una función sin un problema atrás termina siendo una opción más que
+        nadie toca.
+      placeholder: |
+        Para copiar un archivo a otra carpeta hay que abrir dos ventanas y
+        arrastrarlo, y en pantallas chicas no entran las dos.
+    validations:
+      required: true
+
+  - type: textarea
+    id: como-lo-hacen-hoy
+    attributes:
+      label: Cómo lo resolvés hoy
+      description: >
+        Si hay una forma de arreglárselas, decila. Sirve para saber cuánto
+        molesta de verdad y a veces para descubrir que ya existe.
+
+  - type: textarea
+    id: idea
+    attributes:
+      label: Qué se te ocurre
+      description: Si tenés una idea de cómo debería funcionar, va acá. No hace falta.

@@ -1,0 +1,78 @@
+name: Algo no anda
+description: Un error, algo que se rompió o que no hace lo que dice
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Si lo que encontraste es un problema de **seguridad**, no lo escribas acá:
+        pestaña **Security** → **Report a vulnerability**, que es privada.
+        La [política](https://github.com/Vasak-OS/.github/blob/main/SECURITY.md)
+        cuenta cómo sigue.
+
+  - type: textarea
+    id: que-pasa
+    attributes:
+      label: Qué pasa
+      description: Qué esperabas que hiciera y qué hizo en cambio.
+      placeholder: |
+        Al apretar Impr Pant esperaba que sacara una captura y no pasa nada.
+    validations:
+      required: true
+
+  - type: textarea
+    id: como-repetirlo
+    attributes:
+      label: Cómo repetirlo
+      description: Paso a paso, desde el escritorio recién iniciado si hace falta.
+      placeholder: |
+        1. Abrir la galería
+        2. Elegir una imagen y darle a rotar
+        3. Cerrar y volver a abrir: la rotación se perdió
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Versión del paquete
+      description: >
+        `pacman -Q <paquete>`. Si no sabés cuál es, `pacman -Qo $(which <programa>)`
+        te lo dice.
+      placeholder: vasak-gallery 0.3.0-1
+    validations:
+      required: true
+
+  - type: dropdown
+    id: reinicio
+    attributes:
+      label: ¿Reiniciaste después de actualizar?
+      description: >
+        Preguntamos porque muerde seguido: actualizar el paquete **no** reinicia
+        lo que ya está corriendo, así que el programa viejo sigue en memoria y el
+        error parece seguir ahí cuando ya estaba arreglado.
+      options:
+        - Sí, reinicié el equipo
+        - Cerré y volví a abrir la sesión
+        - No, sigo en la misma sesión
+        - No aplica
+    validations:
+      required: true
+
+  - type: textarea
+    id: diario
+    attributes:
+      label: Qué dice el diario
+      description: >
+        `journalctl -b -p warning` para el sistema, o
+        `journalctl --user -b -u <unidad>` para una aplicación del escritorio.
+        Pegá lo que aparezca alrededor del momento en que falló. Se formatea
+        solo, no hace falta marcarlo como código.
+      render: shell
+
+  - type: input
+    id: equipo
+    attributes:
+      label: Dónde corre
+      description: Equipo real o máquina virtual, y qué placa de video si viene al caso.
+      placeholder: Notebook Lenovo, gráficos Intel / VirtualBox 7.0
