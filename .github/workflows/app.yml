@@ -115,12 +115,23 @@ jobs:
       - name: El candado de Cargo está al día
         if: inputs.rust && (hashFiles('Cargo.toml') != '' || hashFiles('src-tauri/Cargo.toml') != '')
         run: |
+          # Sólo donde el candado está versionado.
+          #
+          # Una biblioteca no lo versiona, y eso es lo correcto: quien la usa
+          # resuelve sus propias versiones. Exigirlo ahí sería inventar una
+          # regla que Rust no tiene — y es lo que hizo que esta comprobación
+          # se estrenara en rojo en seis repositorios, donde `--locked` no
+          # fallaba por desfasaje sino porque no había candado que leer.
+          candado=$(git ls-files '*Cargo.lock' | head -1)
+          if [ -z "$candado" ]; then
+            echo "Este repositorio no versiona su Cargo.lock; nada que comprobar."
+            exit 0
+          fi
+
           # `cargo metadata` resuelve el grafo sin compilar nada, así que no
           # hacen falta las dependencias de sistema de Tauri. Es exactamente la
           # comprobación que hace fallar a `makepkg --locked`.
-          dir=.
-          [ -f src-tauri/Cargo.toml ] && dir=src-tauri
-          cd "$dir"
+          cd "$(dirname "$candado")"
           if ! cargo metadata --locked --format-version 1 >/dev/null; then
             echo "::error::El Cargo.lock no coincide con el Cargo.toml. makepkg compila con --locked y va a fallar."
             exit 1
