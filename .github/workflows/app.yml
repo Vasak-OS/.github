@@ -1,0 +1,113 @@
+# Los chequeos que comparten todas las aplicaciones de VasakOS.
+#
+# Vive acá y no copiado en cada repositorio: son treinta y pico, y un chequeo
+# copiado treinta veces es un chequeo que en algunos queda viejo. Cada
+# repositorio pone un archivo de cinco líneas que llama a éste.
+#
+# ── Qué mira, y por qué justo esto ──────────────────────────────────────────
+#
+# Hasta hoy no había ninguna comprobación automática en ningún repositorio: todo
+# corría a mano en la máquina de quien compilaba, justo antes de compilar. Estos
+# cuatro son los que efectivamente mordieron:
+#
+#   versión   Cuatro archivos declaran el número y ninguno lee al otro. Uno que
+#             se queda atrás hace que el paquete no se recompile, y lo mergeado
+#             no llega a nadie: pasó con once paquetes de una vez.
+#   lint      El `$schema` de biome se quedó viejo en catorce repositorios y
+#             frenó una compilación entera, sin que hubiera nada mal en el
+#             código.
+#   tipos     `vue-tsc --noEmit` es parte del build de Tauri, así que un import
+#             sin usar no rompe en `bun run dev` y sí impide empaquetar.
+#   candado   `makepkg` compila con `--locked`. Un `Cargo.lock` desfasado corta
+#             la compilación por la mitad, y compilando a mano no se ve nunca
+#             porque cargo lo actualiza solo.
+#
+# No compila el backend de Rust todavía: un Tauri necesita webkit2gtk y medio
+# escritorio instalado, y eso es una tanda de apt de varios minutos en cada
+# corrida. Vale la pena sumarlo, pero como paso aparte y pensado.
+
+name: Chequeos de aplicación
+
+on:
+  workflow_call:
+    inputs:
+      rust:
+        description: Si el repositorio tiene backend de Rust que comprobar.
+        type: boolean
+        default: true
+
+jobs:
+  revisar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── La versión, que es lo más barato de comprobar y lo que más costó ──
+      - name: Los manifiestos dicen la misma versión
+        run: |
+          declara() { # archivo, cómo leerlo
+            [ -f "$1" ] || return 0
+            case "$2" in
+              json) grep -m1 -Po '"version"\s*:\s*"\K[^"]*' "$1" ;;
+              toml) grep -m1 -Po '^version\s*=\s*"\K[^"]*' "$1" ;;
+            esac
+          }
+
+          declaradas=""
+          for par in "package.json:json" "src-tauri/tauri.conf.json:json"; do
+            v=$(declara "${par%%:*}" "${par##*:}")
+            [ -n "$v" ] && declaradas="$declaradas ${par%%:*}=$v"
+          done
+
+          # En un workspace el miembro dice `version.workspace = true` y el
+          # número vive en la raíz: si el de src-tauri no aparece, se cae al de
+          # arriba.
+          v=$(declara "src-tauri/Cargo.toml" toml)
+          [ -z "$v" ] && v=$(declara "Cargo.toml" toml)
+          [ -n "$v" ] && declaradas="$declaradas Cargo.toml=$v"
+
+          echo "Declaradas:$declaradas"
+          distintas=$(echo "$declaradas" | tr ' ' '\n' | grep -v '^$' | cut -d= -f2 | sort -u | wc -l)
+          if [ "$distintas" -gt 1 ]; then
+            echo "::error::Los manifiestos declaran versiones distintas:$declaradas"
+            exit 1
+          fi
+
+      # ── El frontend ──────────────────────────────────────────────────────
+      - uses: oven-sh/setup-bun@v2
+        if: hashFiles('package.json') != ''
+
+      - name: Instalar dependencias
+        if: hashFiles('package.json') != ''
+        run: bun install --frozen-lockfile
+
+      - name: Lint
+        if: hashFiles('biome.json') != ''
+        run: bunx --bun biome check .
+
+      - name: Tipos
+        # Sólo donde el build ya los exige: si el repositorio no llama a
+        # `vue-tsc`, empaquetarlo tampoco lo hace y exigirlo acá sería inventar
+        # una regla que no existe.
+        if: hashFiles('package.json') != ''
+        run: |
+          if grep -q 'vue-tsc --noEmit' package.json; then
+            bunx --bun vue-tsc --noEmit
+          else
+            echo "Este repositorio no pasa por vue-tsc; nada que comprobar."
+          fi
+
+      # ── El backend ───────────────────────────────────────────────────────
+      - name: El candado de Cargo está al día
+        if: inputs.rust && (hashFiles('Cargo.toml') != '' || hashFiles('src-tauri/Cargo.toml') != '')
+        run: |
+          # `cargo metadata` resuelve el grafo sin compilar nada, así que no
+          # hacen falta las dependencias de sistema de Tauri. Es exactamente la
+          # comprobación que hace fallar a `makepkg --locked`.
+          dir=.
+          [ -f src-tauri/Cargo.toml ] && dir=src-tauri
+          cd "$dir"
+          if ! cargo metadata --locked --format-version 1 >/dev/null; then
+            echo "::error::El Cargo.lock no coincide con el Cargo.toml. makepkg compila con --locked y va a fallar."
+            exit 1
+          fi
