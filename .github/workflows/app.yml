@@ -45,30 +45,44 @@ jobs:
       # ── La versión, que es lo más barato de comprobar y lo que más costó ──
       - name: Los manifiestos dicen la misma versión
         run: |
+          # Ojo con `set -e`, que GitHub pone por omisión (`bash -e`): un `grep`
+          # que no encuentra nada devuelve 1 y corta el script entero, y un
+          # `[ cond ] && asignación` con la condición falsa, también. Las dos
+          # cosas pasan acá todo el tiempo —un repositorio sin `src-tauri`, un
+          # miembro de workspace que dice `version.workspace = true`— así que
+          # cada una lleva su `|| true` o su `if`. Esta comprobación se estrenó
+          # fallando por esto mismo.
           declara() { # archivo, cómo leerlo
             [ -f "$1" ] || return 0
             case "$2" in
-              json) grep -m1 -Po '"version"\s*:\s*"\K[^"]*' "$1" ;;
-              toml) grep -m1 -Po '^version\s*=\s*"\K[^"]*' "$1" ;;
+              json) grep -m1 -Po '"version"\s*:\s*"\K[^"]*' "$1" || true ;;
+              toml) grep -m1 -Po '^version\s*=\s*"\K[^"]*' "$1" || true ;;
             esac
           }
 
           declaradas=""
           for par in "package.json:json" "src-tauri/tauri.conf.json:json"; do
             v=$(declara "${par%%:*}" "${par##*:}")
-            [ -n "$v" ] && declaradas="$declaradas ${par%%:*}=$v"
+            if [ -n "$v" ]; then
+              declaradas="$declaradas ${par%%:*}=$v"
+            fi
           done
 
           # En un workspace el miembro dice `version.workspace = true` y el
           # número vive en la raíz: si el de src-tauri no aparece, se cae al de
           # arriba.
           v=$(declara "src-tauri/Cargo.toml" toml)
-          [ -z "$v" ] && v=$(declara "Cargo.toml" toml)
-          [ -n "$v" ] && declaradas="$declaradas Cargo.toml=$v"
+          if [ -z "$v" ]; then
+            v=$(declara "Cargo.toml" toml)
+          fi
+          if [ -n "$v" ]; then
+            declaradas="$declaradas Cargo.toml=$v"
+          fi
 
-          echo "Declaradas:$declaradas"
-          distintas=$(echo "$declaradas" | tr ' ' '\n' | grep -v '^$' | cut -d= -f2 | sort -u | wc -l)
-          if [ "$distintas" -gt 1 ]; then
+          echo "Declaradas:${declaradas:- (ninguna)}"
+          distintas=$(printf '%s' "$declaradas" | tr ' ' '\n' | grep -c . || true)
+          unicas=$(printf '%s' "$declaradas" | tr ' ' '\n' | grep . | cut -d= -f2 | sort -u | wc -l)
+          if [ "$distintas" -gt 1 ] && [ "$unicas" -gt 1 ]; then
             echo "::error::Los manifiestos declaran versiones distintas:$declaradas"
             exit 1
           fi
