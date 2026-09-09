@@ -48,6 +48,16 @@ on:
 jobs:
   revisar:
     runs-on: ubuntu-latest
+    # Lo único que hace esto es leer el repositorio: clona, instala
+    # dependencias y corre comprobaciones. No comenta, no etiqueta, no publica.
+    #
+    # Sin declararlo, el trabajo recibe los permisos por omisión del
+    # repositorio, que en los más viejos incluyen escritura sobre casi todo. Un
+    # paso comprometido —una acción de terceros, una dependencia— tendría ese
+    # token a mano. Va acá y no en cada repositorio que llama: son veintiocho, y
+    # el permiso que importa es el del trabajo que corre.
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
