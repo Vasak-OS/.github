@@ -68,7 +68,10 @@ nuestra que debilita un componente ajeno es problema nuestro.
 ## Contra qué protege VasakOS, y contra qué todavía no
 
 Esto es lo que hay hoy, sin adornos. Está acá porque una política de seguridad
-que sólo enumera lo que funciona no le sirve a quien tiene que decidir si confiar.
+que sólo enumera lo que funciona no le sirve a quien tiene que decidir si
+confiar. El detalle —qué hay para proteger, de dónde puede venir el problema y
+qué queda explícitamente afuera— está en el
+[modelo de amenazas](THREAT-MODEL.md).
 
 **Lo que sí hace cumplir.** El confinamiento real lo pone AppArmor, que es
 independiente de cómo se lance el programa. Un AppImage no puede leer tus claves
@@ -98,8 +101,10 @@ El seguimiento de todo esto está en
 
 ## Lo que falta de esta política
 
-Es una primera versión y lo dice: faltan el threat model completo y el proceso
-de CVE. Está en [website#5](https://github.com/Vasak-OS/website/issues/5).
+Falta el proceso de CVE, y falta por una razón concreta: depende de tener por
+dónde avisar. Hoy un arreglo de seguridad llega cuando la persona se acuerda de
+actualizar, así que un proceso de CVE sin notificador es media respuesta. Está
+en [website#5](https://github.com/Vasak-OS/website/issues/5) junto con él.
 
 El fuzzing de los analizadores privilegiados sí está. Los tres que leen entrada
 que eligió otro tienen pruebas de propiedad corriendo en cada push: el registro
