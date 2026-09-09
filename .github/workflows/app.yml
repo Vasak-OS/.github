@@ -18,6 +18,10 @@
 #             código.
 #   tipos     `vue-tsc --noEmit` es parte del build de Tauri, así que un import
 #             sin usar no rompe en `bun run dev` y sí impide empaquetar.
+#   pruebas   Las de frontend, que existían y no las corría nadie: 604 en trece
+#             repositorios, todas pasando y ninguna vigilada. El paso de tipos
+#             sólo cubre a los que compilan con `vue-tsc`, y el de Rust sólo al
+#             backend.
 #   candado   `makepkg` compila con `--locked`. Un `Cargo.lock` desfasado corta
 #             la compilación por la mitad, y compilando a mano no se ve nunca
 #             porque cargo lo actualiza solo.
@@ -128,6 +132,18 @@ jobs:
             bunx --bun vue-tsc --noEmit
           else
             echo "Este repositorio no pasa por vue-tsc; nada que comprobar."
+          fi
+
+      - name: Pruebas del frontend
+        if: hashFiles('package.json') != ''
+        run: |
+          # Se pregunta por el script con un parser y no con un `grep`: un
+          # `"test"` suelto también aparece en las dependencias, y ahí el grep
+          # diría que sí sobre un repositorio que no tiene pruebas.
+          if bun -e 'const p = await Bun.file("package.json").json(); process.exit(p.scripts?.test ? 0 : 1)'; then
+            bun run test
+          else
+            echo "Este repositorio no declara pruebas de frontend."
           fi
 
       # ── El backend ───────────────────────────────────────────────────────
