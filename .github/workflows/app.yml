@@ -35,6 +35,15 @@ on:
         description: Si el repositorio tiene backend de Rust que comprobar.
         type: boolean
         default: true
+      pruebas_rust:
+        description: >
+          Crates cuyas pruebas correr, en la forma que espera `cargo test`
+          (`-p uno -p otro`). Vacío por omisión y hay que pedirlo a mano: un
+          crate de Tauri arrastra webkit2gtk y medio escritorio, y eso son
+          varios minutos de apt en cada corrida. Los que no dependen de Tauri
+          compilan en un runner pelado y ahí sí conviene.
+        type: string
+        default: ''
 
 jobs:
   revisar:
@@ -136,3 +145,13 @@ jobs:
             echo "::error::El Cargo.lock no coincide con el Cargo.toml. makepkg compila con --locked y va a fallar."
             exit 1
           fi
+
+      - name: Pruebas de Rust
+        if: inputs.pruebas_rust != ''
+        run: |
+          # Sin `--all-targets`: alcanza con las pruebas, y compilar los
+          # ejemplos y los benchmarks sería tiempo sin nada a cambio.
+          dir=.
+          [ -f src-tauri/Cargo.toml ] && [ ! -f Cargo.toml ] && dir=src-tauri
+          cd "$dir"
+          cargo test ${{ inputs.pruebas_rust }}
