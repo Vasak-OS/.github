@@ -11,10 +11,11 @@ alguno, esto es lo que hacemos con tu reporte.
 **Usá el reporte privado de GitHub**, no un issue público. En el repositorio que
 corresponda: pestaña **Security** → **Report a vulnerability**.
 
-Está habilitado en los que llevan código privilegiado —`vasak-keyring`,
-`vasak-permissions`, `polkit-vasak`, `vasak-installer`, `vasak-connect`,
-`vasak-desktop`— y en `PKGBUILDS`, `archiso` y el sitio. Si el repositorio que te
-interesa no lo tiene, o no sabés cuál es, mandalo a
+Está habilitado en **todos** los repositorios activos de la organización, así
+que el que te interese lo va a tener. La única excepción es `vue-libvasak`, que
+está archivado y GitHub no deja habilitarlo en un repositorio de sólo lectura.
+
+Si no sabés cuál es el repositorio, mandalo a
 [vasak-permissions](https://github.com/Vasak-OS/vasak-permissions/security) y lo
 derivamos: nos llega igual.
 
@@ -57,6 +58,8 @@ privilegios o toca secretos:
 - `polkit-vasak` — el agente que pide la contraseña de administrador.
 - `vasak-installer` — corre como root y particiona discos.
 - `vasak-connect` — expone el teléfono al escritorio; entrada desde la red.
+- `vasak-wayfire-plugins` — corre **dentro del compositor** y decide qué
+  protocolos de Wayland ve cada cliente.
 - Los perfiles de AppArmor y la configuración del sistema en
   `vasak-desktop-settings`, y las recetas de `PKGBUILDS`.
 
@@ -99,12 +102,26 @@ su arranque**, así que hoy se instala con Secure Boot desactivado
 El seguimiento de todo esto está en
 [vasak-permissions#34](https://github.com/Vasak-OS/vasak-permissions/issues/34).
 
+## Qué pasa después de que reportás
+
+El detalle está en el [proceso de aviso](AVISOS.md): cuándo pedimos un CVE y
+cuándo no, quién lo pide, qué dice un aviso y cómo se entera quien ya instaló.
+
+En resumen: el arreglo sale como una actualización normal, el aviso se publica
+**después** de que el paquete está en el repositorio, y `vasak-update` lo
+comprueba una vez por día y al iniciar sesión, así que llega dentro de las
+veinticuatro horas a un equipo encendido.
+
+Con un límite que conviene saber: **el aviso no distingue todavía una
+actualización de seguridad de una cualquiera.** La base de paquetes de pacman no
+tiene ningún campo de seguridad, así que quien pospone las actualizaciones
+pospone también éstas sin enterarse de que son distintas. El proceso explica qué
+lo cierra.
+
 ## Lo que falta de esta política
 
-Falta el proceso de CVE, y falta por una razón concreta: depende de tener por
-dónde avisar. Hoy un arreglo de seguridad llega cuando la persona se acuerda de
-actualizar, así que un proceso de CVE sin notificador es media respuesta. Está
-en [website#5](https://github.com/Vasak-OS/website/issues/5) junto con él.
+Queda decidir si va a haber **auditoría externa** del llavero y del agente de
+PolicyKit. Está en [website#5](https://github.com/Vasak-OS/website/issues/5).
 
 El fuzzing de los analizadores privilegiados sí está. Los tres que leen entrada
 que eligió otro tienen pruebas de propiedad corriendo en cada push: el registro
