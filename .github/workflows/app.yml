@@ -64,6 +64,11 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          # El paso de formato compara contra la base del PR, y para eso hace
+          # falta el historial: el checkout por omisión trae un commit solo y
+          # no habría con qué comparar.
+          fetch-depth: 0
 
       # ── La versión, que es lo más barato de comprobar y lo que más costó ──
       - name: Los manifiestos dicen la misma versión
@@ -147,6 +152,109 @@ jobs:
           fi
 
       # ── El backend ───────────────────────────────────────────────────────
+      # ── El formato, sólo en lo que el PR toca ────────────────────────────
+      #
+      # Mira los archivos que el PR agrega o cambia y ningún otro. Esto no es
+      # timidez: `cargo fmt --check` entero hoy da 1.734 diferencias repartidas
+      # en 31 de los 32 repositorios con Rust, así que estrenarlo completo
+      # pondría en rojo a casi toda la organización por código que ese PR no
+      # tocó. Es exactamente lo que ya pasó con `--locked`, que debutó fallando
+      # en seis.
+      #
+      # Acotado a lo que el PR toca, en cambio, frena la deriva desde el primer
+      # día y no cobra nada por el pasivo: lo viejo se va formateando solo, a
+      # medida que se lo edita por otra razón. Cuando el pasivo llegue a cero
+      # —o si se lo salda de una con un PR mecánico por repositorio— esto se
+      # endurece borrando el filtro.
+      - name: El formato de Rust en lo que toca el PR
+        if: inputs.rust && github.event_name == 'pull_request'
+        run: |
+          set -euo pipefail
+
+          # `ACMR` deja afuera los borrados: pedirle el formato a un archivo
+          # que el PR eliminó falla siempre y no dice nada.
+          base=$(git merge-base "${{ github.event.pull_request.base.sha }}" HEAD)
+          mapfile -t tocados < <(git diff --name-only --diff-filter=ACMR "$base" HEAD -- '*.rs')
+
+          if [ ${#tocados[@]} -eq 0 ]; then
+            echo "Este PR no toca ningún .rs; nada que comprobar."
+            exit 0
+          fi
+
+          # Se corre `cargo fmt` y no `rustfmt` a secas porque la edición sale
+          # del manifiesto: siete crates de la organización la heredan del
+          # workspace con `edition.workspace = true`, y rustfmt suelto no sabe
+          # resolver eso — asumiría 2015 y marcaría diferencias inventadas.
+          #
+          # Por cada archivo tocado se busca su Cargo.toml más cercano, que es
+          # lo que hace que esto cubra el repositorio entero y no una carpeta
+          # elegida a mano.
+          manifiestos=$(
+            for archivo in "${tocados[@]}"; do
+              dir=$(dirname "$archivo")
+              while [ "$dir" != "." ] && [ ! -f "$dir/Cargo.toml" ]; do
+                dir=$(dirname "$dir")
+              done
+              [ -f "$dir/Cargo.toml" ] && echo "$dir"
+            done | sort -u
+          )
+
+          if [ -z "$manifiestos" ]; then
+            echo "Los .rs que toca el PR no cuelgan de ningún Cargo.toml; nada que comprobar."
+            exit 0
+          fi
+
+          # `cargo fmt --check` no escribe nada y sale distinto de cero cuando
+          # hay diferencias, así que no se puede cortar acá: todavía no se sabe
+          # cuáles son de este PR.
+          #
+          # Pero «distinto de cero» también es lo que sale cuando no pudo correr
+          # —rustfmt ausente, manifiesto ilegible—, y ahí los dos casos salen 1.
+          # Descartarlo sin mirar dejaría el archivo de diferencias vacío y el
+          # paso diría «sin diferencias»: verde sin haber comprobado nada, que
+          # es peor que no tener la comprobación. Lo que los separa es que un
+          # fallo operativo no produce ninguna línea `Diff in` y sí escribe en
+          # stderr; unas diferencias de verdad hacen exactamente lo contrario.
+          diferencias=$(mktemp)
+          for manifiesto in $manifiestos; do
+            antes=$(wc -l < "$diferencias")
+            errores=$(mktemp)
+            if ! ( cd "$manifiesto" && cargo fmt --check ) >> "$diferencias" 2>"$errores"; then
+              # Se mira si produjo diferencias y no si stderr trae algo: cargo
+              # avisa por stderr de cosas que no son fallos —una clave de más
+              # en el manifiesto, por ejemplo— y eso no tiene que voltear el
+              # paso.
+              if [ "$(wc -l < "$diferencias")" -eq "$antes" ]; then
+                echo "::error::No se pudo comprobar el formato en «$manifiesto»; el paso no llegó a mirar nada."
+                cat "$errores" >&2
+                exit 1
+              fi
+            fi
+          done
+
+          # De todo lo que salió, sólo lo que este PR tocó.
+          sin_formatear=()
+          for archivo in "${tocados[@]}"; do
+            if grep -qF "Diff in $PWD/$archivo:" "$diferencias"; then
+              sin_formatear+=("$archivo")
+            fi
+          done
+
+          if [ ${#sin_formatear[@]} -eq 0 ]; then
+            echo "Sin diferencias de formato en lo que toca el PR."
+            exit 0
+          fi
+
+          for archivo in "${sin_formatear[@]}"; do
+            echo "::error file=$archivo::Sin formatear. Corré «cargo fmt» y volvé a subir."
+          done
+          if [ ${#sin_formatear[@]} -eq 1 ]; then
+            echo "::error::Hay un archivo sin formatear. Se comprueba sólo lo que toca este PR."
+          else
+            echo "::error::Hay ${#sin_formatear[@]} archivos sin formatear. Se comprueba sólo lo que toca este PR."
+          fi
+          exit 1
+
       - name: El candado de Cargo está al día
         if: inputs.rust && (hashFiles('Cargo.toml') != '' || hashFiles('src-tauri/Cargo.toml') != '')
         run: |
