@@ -205,11 +205,31 @@ jobs:
           fi
 
           # `cargo fmt --check` no escribe nada y sale distinto de cero cuando
-          # hay diferencias, así que el `|| true` es para poder filtrarlas: acá
-          # todavía no se sabe cuáles son de este PR.
+          # hay diferencias, así que no se puede cortar acá: todavía no se sabe
+          # cuáles son de este PR.
+          #
+          # Pero «distinto de cero» también es lo que sale cuando no pudo correr
+          # —rustfmt ausente, manifiesto ilegible—, y ahí los dos casos salen 1.
+          # Descartarlo sin mirar dejaría el archivo de diferencias vacío y el
+          # paso diría «sin diferencias»: verde sin haber comprobado nada, que
+          # es peor que no tener la comprobación. Lo que los separa es que un
+          # fallo operativo no produce ninguna línea `Diff in` y sí escribe en
+          # stderr; unas diferencias de verdad hacen exactamente lo contrario.
           diferencias=$(mktemp)
           for manifiesto in $manifiestos; do
-            ( cd "$manifiesto" && cargo fmt --check ) >> "$diferencias" 2>/dev/null || true
+            antes=$(wc -l < "$diferencias")
+            errores=$(mktemp)
+            if ! ( cd "$manifiesto" && cargo fmt --check ) >> "$diferencias" 2>"$errores"; then
+              # Se mira si produjo diferencias y no si stderr trae algo: cargo
+              # avisa por stderr de cosas que no son fallos —una clave de más
+              # en el manifiesto, por ejemplo— y eso no tiene que voltear el
+              # paso.
+              if [ "$(wc -l < "$diferencias")" -eq "$antes" ]; then
+                echo "::error::No se pudo comprobar el formato en «$manifiesto»; el paso no llegó a mirar nada."
+                cat "$errores" >&2
+                exit 1
+              fi
+            fi
           done
 
           # De todo lo que salió, sólo lo que este PR tocó.
