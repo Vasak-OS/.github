@@ -17,7 +17,9 @@
 #             frenó una compilación entera, sin que hubiera nada mal en el
 #             código.
 #   tipos     `vue-tsc --noEmit` es parte del build de Tauri, así que un import
-#             sin usar no rompe en `bun run dev` y sí impide empaquetar.
+#             sin usar no rompe en `bun run dev` y sí impide empaquetar. Va sin
+#             `--bun`: bajo ese runtime degrada a `tsc` y deja de mirar los
+#             `.vue`, que en una aplicación Vue es casi todo el código.
 #   pruebas   Las de frontend, que existían y no las corría nadie: 604 en trece
 #             repositorios, todas pasando y ninguna vigilada. El paso de tipos
 #             sólo cubre a los que compilan con `vue-tsc`, y el de Rust sólo al
@@ -131,10 +133,18 @@ jobs:
         # Sólo donde el build ya los exige: si el repositorio no llama a
         # `vue-tsc`, empaquetarlo tampoco lo hace y exigirlo acá sería inventar
         # una regla que no existe.
+        #
+        # **Sin `--bun`.** Bajo el runtime de Bun, `vue-tsc` no encuentra el
+        # gancho que le deja leer los componentes de un solo archivo y degrada
+        # a `tsc` a secas: comprueba los `.ts` y **no mira ningún `.vue`**. No
+        # avisa y termina en cero, así que este paso venía dando el visto bueno
+        # sin haber abierto el 90% del código de una aplicación Vue. Se
+        # comprobó metiendo un `const x: number = 'texto'` en un `.vue`: con
+        # `--bun` no sale nada, sin él salta el error.
         if: hashFiles('package.json') != ''
         run: |
           if grep -q 'vue-tsc --noEmit' package.json; then
-            bunx --bun vue-tsc --noEmit
+            bunx vue-tsc --noEmit
           else
             echo "Este repositorio no pasa por vue-tsc; nada que comprobar."
           fi
