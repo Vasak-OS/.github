@@ -50,6 +50,16 @@ on:
           compilan en un runner pelado y ahí sí conviene.
         type: string
         default: ''
+      bibliotecas_cortan:
+        description: >
+          Si una biblioteca propia atrasada corta la corrida en vez de sólo
+          avisar. Empieza en falso a propósito: al estrenarse esta comprobación
+          quince repositorios estaban atrás, y hacerla fallar de entrada habría
+          bloqueado todo el trabajo —incluido el de ponerse al día—. Cada
+          repositorio que se pone al día lo enciende, y así no se vuelve a
+          quedar atrás.
+        type: boolean
+        default: false
 
 jobs:
   revisar:
@@ -65,7 +75,10 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      # Las acciones van clavadas al commit y no a la etiqueta: una etiqueta
+      # se puede mover, y quien pueda moverla decide qué corre acá. Es el
+      # mismo commit que ya usa el flujo de publicación de este taller.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           # El paso de formato compara contra la base del PR, y para eso hace
           # falta el historial: el checkout por omisión trae un commit solo y
@@ -124,6 +137,37 @@ jobs:
       - name: Instalar dependencias
         if: hashFiles('package.json') != ''
         run: bun install --frozen-lockfile
+
+      # El guardia vive en un archivo y no incrustado acá porque tiene lógica
+      # que se puede equivocar en silencio —qué acepta cada forma de rango— y
+      # todo lo que corre en treinta repositorios necesita pruebas. Se trae el
+      # repositorio compartido a un subdirectorio para poder ejecutarlo: es
+      # público, y se toma de `main` porque con `@main` se llama este mismo
+      # flujo.
+      - name: Traer los scripts compartidos
+        if: hashFiles('package.json') != ''
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          repository: Vasak-OS/.github
+          # `main` y no un commit fijo: los 35 repositorios llaman a este
+          # flujo con `@main`, así que el script y el flujo se mueven juntos.
+          # Clavarlo acá los separaría —el flujo nuevo con el script viejo— que
+          # es justo la forma de fallar que este guardia vino a evitar.
+          ref: main
+          path: .vasak-ci
+
+      - name: Las bibliotecas propias están al día
+        if: hashFiles('package.json') != ''
+        run: |
+          # El directorio traído queda **dentro** del árbol del repositorio que
+          # se está revisando, y el paso de lint corre `biome check .`: si se
+          # quedara, se lintearían archivos de otro repositorio y el error
+          # aparecería en un PR que no los tocó. Se saca apenas se usa, y el
+          # código de salida se conserva a mano porque `rm` lo pisaría.
+          estado=0
+          python3 .vasak-ci/scripts/bibliotecas_al_dia.py ${{ inputs.bibliotecas_cortan && '--cortar' || '' }} || estado=$?
+          rm -rf .vasak-ci
+          exit $estado
 
       - name: Lint
         if: hashFiles('biome.json') != ''
