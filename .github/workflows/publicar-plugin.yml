@@ -1,0 +1,213 @@
+# La publicación de los plugins de Tauri, compartida por los nueve.
+#
+# ── Por qué no se dispara con un release ────────────────────────────────────
+#
+# Porque ya sabemos cómo termina eso. `vue-libvasak` tenía un flujo que publicaba
+# **al crear un release**, no se cortó ninguno, y ocho versiones menores nunca
+# llegaron a npm: el arreglo estaba en `main`, el flujo estaba escrito, y las
+# aplicaciones seguían instalando la vieja. Nada falló nunca. Se descubrió meses
+# después y de casualidad.
+#
+# Un disparador que depende de que alguien se acuerde de hacer una ceremonia
+# aparte es un disparador que un día no se usa. Acá se publica cuando la versión
+# del manifiesto **no está en el registro**, y punto. El taller ya sube la
+# versión en cada merge —está en su CLAUDE.md—, así que el gesto que dispara la
+# publicación es el mismo que ya se hace.
+#
+# ── Y por qué es idempotente ────────────────────────────────────────────────
+#
+# Cada registro se consulta antes de subir. Si la versión ya está, ese registro
+# se saltea y la corrida sigue en verde. Eso hace que:
+#
+#   - un push a `main` que no toca la versión no haga nada;
+#   - volver a correr el flujo a mano sea inofensivo;
+#   - que un registro falle no impida publicar en el otro, ni obligue a
+#     deshacer nada — de crates.io no se puede borrar una versión, sólo
+#     retirarla, así que un flujo que reintenta todo o nada sería peor.
+#
+# ── Los dos registros son independientes a propósito ────────────────────────
+#
+# Un plugin puede tener sólo uno de los dos manifiestos, o faltar uno de los dos
+# secretos. Cada mitad mira si tiene con qué y avisa si no, en vez de cortar: el
+# 2026-09-21 el token de npm estaba vencido y el de cargo no, y publicar en
+# crates.io igual entregó el arreglo, porque el código de esos dos plugins vive
+# entero del lado de Rust.
+
+name: Publicar el plugin
+
+on:
+  workflow_call:
+    secrets:
+      CARGO_REGISTRY_TOKEN:
+        description: Token de crates.io. Sin él, esa mitad se saltea con aviso.
+        required: false
+      NPM_TOKEN:
+        description: Token de npmjs. Sin él, esa mitad se saltea con aviso.
+        required: false
+
+jobs:
+  publicar:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # Clavada al commit y no a la etiqueta, igual que en el resto del taller:
+      # una etiqueta se puede mover, y quien pueda moverla decide qué corre en
+      # un trabajo que tiene tokens de publicación a mano.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      # ── Qué se publicaría ────────────────────────────────────────────────
+      #
+      # Los nombres salen de los manifiestos y no del nombre del repositorio.
+      # No es prolijidad: `tauri-plugin-i18n` publica el crate como
+      # `tauri-plugin-i18n-vsk`, así que deducirlo del directorio lo habría
+      # mandado a un nombre que no existe.
+      - name: Leer los manifiestos
+        id: leer
+        run: |
+          crate=""; crate_v=""
+          if [ -f Cargo.toml ]; then
+            crate=$(grep -m1 -Po '^name\s*=\s*"\K[^"]*' Cargo.toml || true)
+            crate_v=$(grep -m1 -Po '^version\s*=\s*"\K[^"]*' Cargo.toml || true)
+          fi
+
+          paquete=""; paquete_v=""
+          if [ -f package.json ]; then
+            paquete=$(grep -m1 -Po '"name"\s*:\s*"\K[^"]*' package.json || true)
+            paquete_v=$(grep -m1 -Po '"version"\s*:\s*"\K[^"]*' package.json || true)
+          fi
+
+          echo "crate=$crate"            >> "$GITHUB_OUTPUT"
+          echo "crate_v=$crate_v"        >> "$GITHUB_OUTPUT"
+          echo "paquete=$paquete"        >> "$GITHUB_OUTPUT"
+          echo "paquete_v=$paquete_v"    >> "$GITHUB_OUTPUT"
+          echo "Crate: ${crate:-—} ${crate_v:-—}   npm: ${paquete:-—} ${paquete_v:-—}"
+
+          # Que los dos manifiestos digan lo mismo se comprueba antes, en el
+          # flujo de chequeos. Acá se vuelve a mirar porque esto **publica**: si
+          # se separaran, se subirían dos versiones distintas del mismo cambio y
+          # ninguna de las dos se puede borrar después.
+          if [ -n "$crate_v" ] && [ -n "$paquete_v" ] && [ "$crate_v" != "$paquete_v" ]; then
+            echo "::error::Cargo.toml dice $crate_v y package.json dice $paquete_v. No se publica nada."
+            exit 1
+          fi
+
+      # ── crates.io ─────────────────────────────────────────────────────────
+      - name: ¿Falta esta versión en crates.io?
+        id: falta_crate
+        if: steps.leer.outputs.crate != ''
+        run: |
+          nombre='${{ steps.leer.outputs.crate }}'
+          version='${{ steps.leer.outputs.crate_v }}'
+          # crates.io rechaza los pedidos sin `User-Agent` con un 403, que sin
+          # esto se leería como «la versión no está» y llevaría a publicar de
+          # nuevo algo ya publicado — que falla, pero por el motivo equivocado
+          # y con un mensaje que no dice esto.
+          codigo=$(curl -s -o /dev/null -w '%{http_code}' \
+            -H 'User-Agent: Vasak-OS publicar-plugin (github.com/Vasak-OS)' \
+            "https://crates.io/api/v1/crates/$nombre/$version")
+          case "$codigo" in
+            200) echo "falta=no"  >> "$GITHUB_OUTPUT"; echo "$nombre $version ya está en crates.io." ;;
+            404) echo "falta=sí"  >> "$GITHUB_OUTPUT"; echo "$nombre $version no está: se publica." ;;
+            *)   echo "::error::crates.io contestó $codigo al preguntar por $nombre $version. No se publica a ciegas."
+                 exit 1 ;;
+          esac
+
+      - name: Publicar en crates.io
+        if: steps.falta_crate.outputs.falta == 'sí'
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          if [ -z "$CARGO_REGISTRY_TOKEN" ]; then
+            echo "::warning::Falta el secreto CARGO_REGISTRY_TOKEN: ${{ steps.leer.outputs.crate }} ${{ steps.leer.outputs.crate_v }} queda sin publicar."
+            exit 0
+          fi
+          # Un plugin de Tauri arrastra webkit2gtk y medio escritorio para
+          # compilar, que en un runner pelado son varios minutos de apt. La
+          # verificación ya la hizo el flujo de chequeos sobre este mismo
+          # commit, así que acá se sube sin repetirla.
+          cargo publish --no-verify
+
+      # ── npm ───────────────────────────────────────────────────────────────
+      - uses: oven-sh/setup-bun@v2
+        if: steps.leer.outputs.paquete != ''
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        if: steps.leer.outputs.paquete != ''
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: ¿Falta esta versión en npm?
+        id: falta_npm
+        if: steps.leer.outputs.paquete != ''
+        run: |
+          nombre='${{ steps.leer.outputs.paquete }}'
+          version='${{ steps.leer.outputs.paquete_v }}'
+          # `npm view` sale con error cuando el paquete no existe todavía —el
+          # primer publish de un plugin nuevo—, y con salida vacía cuando existe
+          # pero esa versión no. Los dos casos son «falta», y sin el `|| true`
+          # el primero cortaría el script.
+          hay=$(npm view "$nombre@$version" version 2>/dev/null || true)
+          if [ -n "$hay" ]; then
+            echo "falta=no" >> "$GITHUB_OUTPUT"; echo "$nombre $version ya está en npm."
+          else
+            echo "falta=sí" >> "$GITHUB_OUTPUT"; echo "$nombre $version no está: se publica."
+          fi
+
+      - name: Construir lo que se publica
+        if: steps.falta_npm.outputs.falta == 'sí'
+        run: |
+          bun install --frozen-lockfile
+          # Sin `build` no hay `dist/`, y lo que se subiría es el paquete sin el
+          # JavaScript compilado: se instala, no falla, y no exporta nada.
+          if grep -q '"build"' package.json; then
+            bun run build
+          fi
+
+      - name: Publicar en npm
+        if: steps.falta_npm.outputs.falta == 'sí'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "::warning::Falta el secreto NPM_TOKEN: ${{ steps.leer.outputs.paquete }} ${{ steps.leer.outputs.paquete_v }} queda sin publicar."
+            exit 0
+          fi
+          # Los paquetes son `@vasakgroup/…`, y un scope se publica privado por
+          # omisión aunque la cuenta no tenga plan privado: sin esto el primer
+          # publish de un plugin nuevo falla con un error que habla de pagos.
+          npm publish --access public
+
+      # ── Y que quede dicho qué pasó ────────────────────────────────────────
+      #
+      # Porque la mitad de los caminos de acá arriba son «no hice nada», y en la
+      # lista de corridas todos se ven igual de verdes. Sin este resumen, «no
+      # había que publicar» y «faltaba el token» se leen idénticos.
+      - name: Resumen
+        if: always()
+        run: |
+          {
+            echo "### Publicación"
+            echo
+            echo "| registro | paquete | versión | resultado |"
+            echo "|---|---|---|---|"
+            crate='${{ steps.leer.outputs.crate }}'
+            if [ -n "$crate" ]; then
+              case '${{ steps.falta_crate.outputs.falta }}' in
+                sí) r=$([ -n '${{ secrets.CARGO_REGISTRY_TOKEN }}' ] && echo publicada || echo 'sin token') ;;
+                no) r='ya estaba' ;;
+                *)  r='no se pudo consultar' ;;
+              esac
+              echo "| crates.io | \`$crate\` | ${{ steps.leer.outputs.crate_v }} | $r |"
+            fi
+            paquete='${{ steps.leer.outputs.paquete }}'
+            if [ -n "$paquete" ]; then
+              case '${{ steps.falta_npm.outputs.falta }}' in
+                sí) r=$([ -n '${{ secrets.NPM_TOKEN }}' ] && echo publicada || echo 'sin token') ;;
+                no) r='ya estaba' ;;
+                *)  r='no se pudo consultar' ;;
+              esac
+              echo "| npm | \`$paquete\` | ${{ steps.leer.outputs.paquete_v }} | $r |"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
