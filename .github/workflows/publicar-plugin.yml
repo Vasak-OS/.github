@@ -1,0 +1,348 @@
+# La publicación de los plugins de Tauri, compartida por los nueve.
+#
+# ── Por qué no se dispara con un release ────────────────────────────────────
+#
+# Porque ya sabemos cómo termina eso. `vue-libvasak` tenía un flujo que publicaba
+# **al crear un release**, no se cortó ninguno, y ocho versiones menores nunca
+# llegaron a npm: el arreglo estaba en `main`, el flujo estaba escrito, y las
+# aplicaciones seguían instalando la vieja. Nada falló nunca. Se descubrió meses
+# después y de casualidad.
+#
+# Un disparador que depende de que alguien se acuerde de hacer una ceremonia
+# aparte es un disparador que un día no se usa. Acá se publica cuando la versión
+# del manifiesto **no está en el registro**, y punto. El taller ya sube la
+# versión en cada merge —está en su CLAUDE.md—, así que el gesto que dispara la
+# publicación es el mismo que ya se hace.
+#
+# ── Dos trabajos y no uno ───────────────────────────────────────────────────
+#
+# crates.io y npm van en trabajos separados **de verdad**, no en pasos con
+# condiciones. Con todo en un trabajo, cualquier corte del lado de cargo —una
+# consulta que contesta 502, una subida que falla— se lleva puesto el de npm sin
+# haberlo intentado, porque los pasos siguientes heredan `success()`. Dos
+# trabajos hacen que una mitad caída deje a la otra hacer su trabajo, que es lo
+# que hizo falta el 2026-09-21: el token de npm estaba vencido y el de cargo no.
+#
+# ── Y por qué es idempotente ────────────────────────────────────────────────
+#
+# Cada registro se consulta antes de subir y, si la versión ya está, ese trabajo
+# se saltea. Además la subida trata «esa versión ya existe» como éxito y no como
+# error: entre la consulta y el `publish` hay una ventana, y `concurrency` la
+# angosta pero no la cierra —dos corridas del mismo repositorio no se pisan, dos
+# personas publicando a mano sí—. De crates.io no se puede borrar una versión,
+# sólo retirarla, así que reintentar tiene que ser barato.
+
+name: Publicar el plugin
+
+on:
+  workflow_call:
+    secrets:
+      CARGO_REGISTRY_TOKEN:
+        description: Token de crates.io. Sin él, ese trabajo se saltea con aviso.
+        required: false
+      NPM_TOKEN:
+        description: Token de npmjs. Sin él, ese trabajo se saltea con aviso.
+        required: false
+
+# Dos corridas del mismo repositorio publicando a la vez verían las dos que
+# falta la misma versión. No se cancela la que está en curso: cancelar a mitad
+# de un `publish` deja el registro en un estado que no eligió nadie.
+concurrency:
+  group: publicar-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  # ── Qué se publicaría ──────────────────────────────────────────────────────
+  #
+  # Aparte porque lo miran los dos trabajos, y porque leer mal un manifiesto acá
+  # significa publicar con el nombre o la versión equivocados, que no se deshace.
+  leer:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      crate: ${{ steps.manifiestos.outputs.crate }}
+      crate_v: ${{ steps.manifiestos.outputs.crate_v }}
+      paquete: ${{ steps.manifiestos.outputs.paquete }}
+      paquete_v: ${{ steps.manifiestos.outputs.paquete_v }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          # La credencial del checkout queda en el disco del runner, y acá abajo
+          # corre `cargo metadata`, que ejecuta build scripts. Un trabajo que no
+          # empuja nada no tiene por qué dejarla a mano.
+          persist-credentials: false
+
+      - name: Leer los manifiestos
+        id: manifiestos
+        run: |
+          crate=""; crate_v=""
+          if [ -f Cargo.toml ]; then
+            # Con `cargo metadata` y no con `grep`: el `name` de `[package]` no
+            # es el único `name =` de un Cargo.toml —`[lib]` tiene el suyo, y un
+            # workspace tiene miembros— y una versión heredada se escribe
+            # `version.workspace = true`, que un grep lee como vacío aunque
+            # cargo tenga un número perfectamente publicable. Equivocarse acá es
+            # publicar con el nombre o la versión de otro.
+            datos=$(cargo metadata --no-deps --format-version 1)
+            crate=$(printf '%s' "$datos" | jq -r '.packages[0].name // ""')
+            crate_v=$(printf '%s' "$datos" | jq -r '.packages[0].version // ""')
+            cuantos=$(printf '%s' "$datos" | jq -r '.packages | length')
+            if [ "$cuantos" != "1" ]; then
+              echo "::error::El Cargo.toml declara $cuantos paquetes. Este flujo publica uno solo y no sabe cuál."
+              exit 1
+            fi
+          fi
+
+          paquete=""; paquete_v=""
+          if [ -f package.json ]; then
+            # Con `jq` y no con `grep`: un `"name"` anidado —en `dependencies`,
+            # en `exports`— aparece antes que el de la raíz según cómo esté
+            # escrito el archivo, y se publicaría consultando un paquete y
+            # subiendo otro.
+            paquete=$(jq -r '.name // ""' package.json)
+            paquete_v=$(jq -r '.version // ""' package.json)
+          fi
+
+          {
+            echo "crate=$crate"
+            echo "crate_v=$crate_v"
+            echo "paquete=$paquete"
+            echo "paquete_v=$paquete_v"
+          } >> "$GITHUB_OUTPUT"
+          echo "Crate: ${crate:-—} ${crate_v:-—}   npm: ${paquete:-—} ${paquete_v:-—}"
+
+          # Que los dos manifiestos digan lo mismo se comprueba en el flujo de
+          # chequeos. Acá se vuelve a mirar porque esto **publica**: si se
+          # separaran, se subirían dos versiones distintas del mismo cambio y
+          # ninguna de las dos se puede borrar después.
+          if [ -n "$crate_v" ] && [ -n "$paquete_v" ] && [ "$crate_v" != "$paquete_v" ]; then
+            echo "::error::Cargo.toml dice $crate_v y package.json dice $paquete_v. No se publica nada."
+            exit 1
+          fi
+
+  # ── crates.io ───────────────────────────────────────────────────────────────
+  crates:
+    needs: leer
+    if: needs.leer.outputs.crate != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      resultado: ${{ steps.subir.outputs.resultado || steps.consulta.outputs.resultado }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      - name: ¿Falta esta versión en crates.io?
+        id: consulta
+        env:
+          NOMBRE: ${{ needs.leer.outputs.crate }}
+          VERSION: ${{ needs.leer.outputs.crate_v }}
+        run: |
+          # crates.io rechaza los pedidos sin `User-Agent` con un 403, que sin
+          # esto se leería como «la versión no está» y llevaría a subir de nuevo
+          # algo ya publicado.
+          codigo=$(curl -s -o /dev/null -w '%{http_code}' \
+            -H 'User-Agent: Vasak-OS publicar-plugin (github.com/Vasak-OS)' \
+            "https://crates.io/api/v1/crates/$NOMBRE/$VERSION")
+          case "$codigo" in
+            200) echo "falta=no" >> "$GITHUB_OUTPUT"
+                 echo "resultado=ya estaba" >> "$GITHUB_OUTPUT"
+                 echo "$NOMBRE $VERSION ya está en crates.io." ;;
+            404) echo "falta=sí" >> "$GITHUB_OUTPUT"
+                 echo "$NOMBRE $VERSION no está: se publica." ;;
+            *)   echo "resultado=no se pudo consultar ($codigo)" >> "$GITHUB_OUTPUT"
+                 echo "::error::crates.io contestó $codigo al preguntar por $NOMBRE $VERSION. No se publica a ciegas."
+                 exit 1 ;;
+          esac
+
+      - name: Publicar en crates.io
+        id: subir
+        if: steps.consulta.outputs.falta == 'sí'
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          if [ -z "$CARGO_REGISTRY_TOKEN" ]; then
+            echo "resultado=sin token" >> "$GITHUB_OUTPUT"
+            echo "::warning::Falta el secreto CARGO_REGISTRY_TOKEN: queda sin publicar."
+            exit 0
+          fi
+
+          # `--no-verify`: un plugin de Tauri arrastra webkit2gtk y medio
+          # escritorio para compilar, y la verificación ya la hizo el flujo de
+          # chequeos sobre este mismo commit.
+          salida=$(cargo publish --no-verify 2>&1) && estado=0 || estado=$?
+          printf '%s\n' "$salida"
+
+          if [ "$estado" = "0" ]; then
+            echo "resultado=publicada" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Entre la consulta y esto hay una ventana. Que ya exista significa
+          # que alguien llegó primero con la misma versión: es el estado que se
+          # quería, no un error.
+          if printf '%s' "$salida" | grep -qi "already .*uploaded\|already exists"; then
+            echo "resultado=ya estaba" >> "$GITHUB_OUTPUT"
+            echo "::notice::Otra corrida publicó esta versión primero."
+            exit 0
+          fi
+
+          echo "resultado=falló" >> "$GITHUB_OUTPUT"
+          exit "$estado"
+
+  # ── npm ─────────────────────────────────────────────────────────────────────
+  #
+  # Sin `needs: crates`: que cargo no pueda no es motivo para no publicar acá.
+  npm:
+    needs: leer
+    if: needs.leer.outputs.paquete != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      resultado: ${{ steps.subir.outputs.resultado || steps.consulta.outputs.resultado }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          # Acá pesa más que en los otros trabajos: abajo corren `bun install`,
+          # `bun run build` y `npm publish`, que ejecutan código de terceros y
+          # los scripts de ciclo de vida del propio paquete, con el token de npm
+          # ya en el entorno. La credencial del checkout no tiene por qué estar
+          # también.
+          persist-credentials: false
+
+      # Clavadas al commit y no a la etiqueta: una etiqueta se puede mover, y
+      # quien pueda moverla decide qué corre en un trabajo que tiene un token de
+      # publicación a mano.
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: ¿Falta esta versión en npm?
+        id: consulta
+        env:
+          NOMBRE: ${{ needs.leer.outputs.paquete }}
+          VERSION: ${{ needs.leer.outputs.paquete_v }}
+        run: |
+          # Los errores de `npm view` no son todos iguales y tratarlos igual es
+          # el error caro: un 500 o un token vencido contestan «error», y
+          # leerlos como «falta la versión» lleva a intentar publicar y a
+          # reportar después un fallo de subida en vez del fallo real. Sólo
+          # E404 —el paquete no existe todavía— cuenta como falta.
+          salida=$(npm view "$NOMBRE@$VERSION" version 2>&1) && estado=0 || estado=$?
+
+          if [ "$estado" = "0" ]; then
+            if [ -n "$salida" ]; then
+              echo "falta=no" >> "$GITHUB_OUTPUT"
+              echo "resultado=ya estaba" >> "$GITHUB_OUTPUT"
+              echo "$NOMBRE $VERSION ya está en npm."
+            else
+              # El paquete existe y esa versión no: `npm view` sale bien y sin
+              # nada que decir.
+              echo "falta=sí" >> "$GITHUB_OUTPUT"
+              echo "$NOMBRE $VERSION no está: se publica."
+            fi
+            exit 0
+          fi
+
+          if printf '%s' "$salida" | grep -q 'E404'; then
+            echo "falta=sí" >> "$GITHUB_OUTPUT"
+            echo "$NOMBRE no existe todavía: primer publish."
+            exit 0
+          fi
+
+          printf '%s\n' "$salida"
+          echo "resultado=no se pudo consultar" >> "$GITHUB_OUTPUT"
+          echo "::error::npm falló al consultar $NOMBRE@$VERSION, y eso no es «falta la versión». No se publica a ciegas."
+          exit "$estado"
+
+      - name: Construir lo que se publica
+        if: steps.consulta.outputs.falta == 'sí'
+        run: |
+          bun install --frozen-lockfile
+          # Sin `build` no hay `dist/`, y lo que se subiría es el paquete sin el
+          # JavaScript compilado: se instala, no falla, y no exporta nada.
+          if jq -e '.scripts.build' package.json >/dev/null; then
+            bun run build
+          fi
+
+      - name: Publicar en npm
+        id: subir
+        if: steps.consulta.outputs.falta == 'sí'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NOMBRE: ${{ needs.leer.outputs.paquete }}
+          VERSION: ${{ needs.leer.outputs.paquete_v }}
+        run: |
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "resultado=sin token" >> "$GITHUB_OUTPUT"
+            echo "::warning::Falta el secreto NPM_TOKEN: $NOMBRE $VERSION queda sin publicar."
+            exit 0
+          fi
+
+          # Los paquetes son `@vasakgroup/…`, y un scope se publica privado por
+          # omisión aunque la cuenta no tenga plan privado: sin esto el primer
+          # publish de un plugin nuevo falla con un error que habla de pagos.
+          salida=$(npm publish --access public 2>&1) && estado=0 || estado=$?
+          printf '%s\n' "$salida"
+
+          if [ "$estado" = "0" ]; then
+            echo "resultado=publicada" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Igual que en cargo: que ya exista es el estado que se quería.
+          if printf '%s' "$salida" | grep -q 'EPUBLISHCONFLICT\|cannot publish over'; then
+            echo "resultado=ya estaba" >> "$GITHUB_OUTPUT"
+            echo "::notice::Otra corrida publicó esta versión primero."
+            exit 0
+          fi
+
+          echo "resultado=falló" >> "$GITHUB_OUTPUT"
+          exit "$estado"
+
+  # ── Y que quede dicho qué pasó ─────────────────────────────────────────────
+  #
+  # Porque la mitad de los caminos son «no hice nada», y en la lista de corridas
+  # todos se ven igual de verdes. El resultado lo **emite cada trabajo**, no se
+  # deduce de si había token: un `publish` que falla con el token puesto se
+  # habría contado como publicado.
+  resumen:
+    needs: [leer, crates, npm]
+    if: always() && needs.leer.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Resumen
+        env:
+          CRATE: ${{ needs.leer.outputs.crate }}
+          CRATE_V: ${{ needs.leer.outputs.crate_v }}
+          CRATE_R: ${{ needs.crates.outputs.resultado }}
+          CRATE_J: ${{ needs.crates.result }}
+          PAQUETE: ${{ needs.leer.outputs.paquete }}
+          PAQUETE_V: ${{ needs.leer.outputs.paquete_v }}
+          PAQUETE_R: ${{ needs.npm.outputs.resultado }}
+          PAQUETE_J: ${{ needs.npm.result }}
+        run: |
+          fila() { # registro, paquete, versión, resultado, estado del trabajo
+            [ -n "$2" ] || return 0
+            r="$4"
+            # Un trabajo que se cayó sin llegar a emitir nada —cancelado, sin
+            # runner— no tiene que leerse como «no hacía falta».
+            [ -n "$r" ] || r="$5"
+            echo "| $1 | \`$2\` | $3 | $r |"
+          }
+          {
+            echo "### Publicación"
+            echo
+            echo "| registro | paquete | versión | resultado |"
+            echo "|---|---|---|---|"
+            fila "crates.io" "$CRATE" "$CRATE_V" "$CRATE_R" "$CRATE_J"
+            fila "npm" "$PAQUETE" "$PAQUETE_V" "$PAQUETE_R" "$PAQUETE_J"
+          } >> "$GITHUB_STEP_SUMMARY"
