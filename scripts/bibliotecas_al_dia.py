@@ -50,6 +50,14 @@ def alcanza(rango, ultima):
     acento = declarado.group(1)
     mayor, minor, parche = (int(x) for x in declarado.groups()[1:])
 
+    # El piso, antes que el techo. Un rango no sólo tiene un tope: `^0.7.2` no
+    # acepta la 0.7.1 aunque compartan la minor. Pasa cuando el rango declara
+    # algo más nuevo que lo publicado —una versión que se dio de baja, o un
+    # número que se subió antes de publicarlo— y sin esto el guardia se queda
+    # callado justo ahí, que es un estado que alguien debería mirar.
+    if partes(ultima) < (mayor, minor, parche):
+        return False
+
     if acento == "^":
         if mayor == 0 and minor == 0:
             return destino == (0, 0, parche)      # ^0.0.x fija el parche
@@ -80,11 +88,18 @@ def ultima_publicada(nombre):
         return json.load(respuesta)["dist-tags"]["latest"]
 
 
-def revisar(manifiesto, consultar=ultima_publicada):
+def revisar(manifiesto, consultar=None):
     """Las propias que quedaron fuera de alcance, y las que no se pudieron ver.
 
-    `consultar` se puede reemplazar para probar esto sin red.
+    `consultar` se puede reemplazar para probar esto sin red. Se resuelve acá
+    adentro y no en la firma a propósito: un valor por omisión se fija cuando
+    se define la función, así que reemplazar `ultima_publicada` en el módulo no
+    habría tenido efecto y la prueba habría salido a la red creyendo que no.
+    Pasó.
     """
+    if consultar is None:
+        consultar = ultima_publicada
+
     atrasadas, sin_respuesta = [], []
 
     for nombre, rango in sorted(declaradas(manifiesto).items()):
@@ -126,7 +141,13 @@ def main(argv=None):
         print(f"::warning::No se pudo consultar {nombre} ({motivo}); no se comprobó.")
 
     if not atrasadas:
-        print("Las bibliotecas propias están al día.")
+        if sin_respuesta:
+            # Decir «están al día» después de avisar que una no se pudo
+            # consultar es afirmar algo que no se comprobó, y las dos líneas
+            # juntas se contradicen: se lee la segunda y se olvida la primera.
+            print("Ninguna de las que se pudieron consultar está atrasada.")
+        else:
+            print("Las bibliotecas propias están al día.")
         return 0
 
     for nombre, rango, ultima in atrasadas:

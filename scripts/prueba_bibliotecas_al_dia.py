@@ -6,6 +6,7 @@ y lo único que produce es un aviso: si se equivoca hacia el lado permisivo, no
 avisa y nadie se entera — que es exactamente el fallo que vino a evitar.
 """
 
+import os
 import unittest
 
 from bibliotecas_al_dia import alcanza, declaradas, main, revisar
@@ -31,6 +32,27 @@ class ElAcentoEnUnaVersionCero(unittest.TestCase):
         # 1.0 sería el arreglo de raíz.
         self.assertTrue(alcanza("^1.2.3", "1.9.9"))
         self.assertFalse(alcanza("^1.2.3", "2.0.0"))
+
+
+class ElPisoDelRango(unittest.TestCase):
+    """Un rango tiene dos extremos, y el de abajo es el que se olvida.
+
+    Lo encontró la revisión de CodeRabbit: la primera versión sólo miraba el
+    techo, así que `^0.7.2` daba por alcanzable la 0.7.1. Pasa cuando lo
+    publicado es **más viejo** que lo declarado —una versión que se dio de
+    baja, un número que se subió antes de publicarlo— y ahí el guardia se
+    callaba justo en un estado que alguien debería mirar.
+    """
+
+    def test_lo_publicado_mas_viejo_que_lo_declarado_no_alcanza(self):
+        self.assertFalse(alcanza("^0.7.2", "0.7.1"))
+        self.assertFalse(alcanza("~2.7.3", "2.7.1"))
+        self.assertFalse(alcanza("^1.2.3", "1.0.0"))
+
+    def test_lo_publicado_igual_a_lo_declarado_sí_alcanza(self):
+        # El borde de abajo entra: `^0.7.2` acepta exactamente la 0.7.2.
+        self.assertTrue(alcanza("^0.7.2", "0.7.2"))
+        self.assertTrue(alcanza("~2.7.3", "2.7.3"))
 
 
 class OtrasFormasDeRango(unittest.TestCase):
@@ -98,6 +120,55 @@ class CuandoElRegistroNoContesta(unittest.TestCase):
 
 
 class ComoTermina(unittest.TestCase):
+    @staticmethod
+    def se_cae(nombre):
+        raise OSError("sin red")
+
+    def correr(self, manifiesto, consultar):
+        """Corre `main` sobre un manifiesto de mentira y devuelve lo que imprimió."""
+        import contextlib
+        import io
+        import json
+        import tempfile
+
+        import bibliotecas_al_dia
+
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as archivo:
+            json.dump(manifiesto, archivo)
+            ruta = archivo.name
+
+        original = bibliotecas_al_dia.ultima_publicada
+        bibliotecas_al_dia.ultima_publicada = consultar
+        salida = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(salida):
+                bibliotecas_al_dia.main(["--manifiesto", ruta])
+        finally:
+            bibliotecas_al_dia.ultima_publicada = original
+            os.unlink(ruta)
+
+        return salida.getvalue()
+
+    def test_no_dice_que_estan_al_dia_si_alguna_no_se_pudo_consultar(self):
+        # Avisar que no se pudo comprobar una y después decir «están al día»
+        # es afirmar algo que no se comprobó. Y las dos líneas juntas se
+        # contradicen: se lee la última y se olvida la primera.
+        salida = self.correr(
+            {"dependencies": {"@vasakgroup/x": "^1.0.0"}},
+            consultar=self.se_cae,
+        )
+
+        self.assertIn("No se pudo consultar", salida)
+        self.assertNotIn("están al día", salida)
+
+    def test_dice_que_estan_al_dia_solo_cuando_las_vio_a_todas(self):
+        salida = self.correr(
+            {"dependencies": {"@vasakgroup/x": "^1.0.0"}},
+            consultar=lambda nombre: "1.4.0",
+        )
+
+        self.assertIn("están al día", salida)
+
     def test_sin_manifiesto_no_es_un_error(self):
         # Los repositorios que no son aplicaciones no tienen `package.json`, y
         # el guardia no tiene nada que decir sobre ellos.

@@ -75,7 +75,10 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      # Las acciones van clavadas al commit y no a la etiqueta: una etiqueta
+      # se puede mover, y quien pueda moverla decide qué corre acá. Es el
+      # mismo commit que ya usa el flujo de publicación de este taller.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           # El paso de formato compara contra la base del PR, y para eso hace
           # falta el historial: el checkout por omisión trae un commit solo y
@@ -143,9 +146,13 @@ jobs:
       # flujo.
       - name: Traer los scripts compartidos
         if: hashFiles('package.json') != ''
-        uses: actions/checkout@v4
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           repository: Vasak-OS/.github
+          # `main` y no un commit fijo: los 35 repositorios llaman a este
+          # flujo con `@main`, así que el script y el flujo se mueven juntos.
+          # Clavarlo acá los separaría —el flujo nuevo con el script viejo— que
+          # es justo la forma de fallar que este guardia vino a evitar.
           ref: main
           path: .vasak-ci
 
