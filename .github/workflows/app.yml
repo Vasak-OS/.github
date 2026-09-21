@@ -131,7 +131,13 @@ jobs:
           fi
 
       # ── El frontend ──────────────────────────────────────────────────────
-      - uses: oven-sh/setup-bun@v2
+      #
+      # Clavada al commit como las demás. Era la única de los tres flujos que
+      # seguía apuntando a una etiqueta, y es la que más expuesta estaba: una
+      # etiqueta se puede mover, y ésta corre en los treinta y pico
+      # repositorios y justo antes de `bun install`, así que quien pudiera
+      # moverla decidiría qué se ejecuta en todos a la vez.
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         if: hashFiles('package.json') != ''
 
       - name: Instalar dependencias
