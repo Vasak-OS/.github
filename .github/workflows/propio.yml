@@ -1,0 +1,25 @@
+# Los chequeos de este repositorio, que hasta ahora no tenía ninguno.
+#
+# Acá vive el flujo que revisa treinta aplicaciones, así que un error suyo no
+# rompe un repositorio: los rompe todos, o peor, deja de avisar en todos sin que
+# nadie lo note. El guardia de las bibliotecas es justo de ese tipo — lo único
+# que produce es un aviso, y equivocarse hacia el lado permisivo se ve igual que
+# estar todo bien.
+name: Chequeos propios
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  scripts:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pruebas de los scripts
+        working-directory: scripts
+        run: python3 -m unittest discover -p 'prueba_*.py' -v
