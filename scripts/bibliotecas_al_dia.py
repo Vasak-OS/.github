@@ -29,6 +29,21 @@ mismo lugar es la señal de que el arreglo a mano no era el arreglo.
 Sólo mira las propias. Una dependencia de terceros atrasada suele ser una
 decisión —subir una mayor rompe cosas— mientras que quedarse atrás en la
 nuestra no lo decide nadie: pasa.
+
+**Salvo cuando sí lo decide alguien.** Esa premisa tenía un hueco y apareció el
+2026-09-22 en `vasak-file-manager`: la 2.7.0 de `plugin-config-manager` declara
+`pinia: ^4.0.0` y la aplicación está en pinia 3, así que subir el rango se lleva
+puesto un salto mayor que no tiene nada que ver. Sin forma de decirlo, las dos
+salidas eran malas —apagar el guardia para el repositorio entero, y perder la
+vigilancia sobre `vue-libvasak` que es para lo que existe; o dejar un rango que
+alcanza una versión que no se puede instalar—.
+
+Para eso está `vasak.bibliotecasAtrasadas` en el `package.json`: un objeto de
+nombre a **motivo escrito**. El motivo no es decorativo y no se puede dejar
+vacío: una excepción sin explicar es exactamente la deuda que este guardia vino
+a evitar, y con el motivo puesto deja de ser deuda y pasa a ser una decisión que
+alguien puede discutir. Se sigue avisando en cada corrida —no se silencia, se
+deja de cortar—, así que no desaparece de la vista.
 """
 
 import argparse
@@ -115,6 +130,37 @@ def declaradas(manifiesto):
     return todas
 
 
+def atrasadas_a_proposito(manifiesto):
+    """Las que el repositorio declara que se quedan atrás, con su motivo.
+
+    Se lee de `vasak.bibliotecasAtrasadas` en el `package.json`, que es donde
+    está el rango que explica: separarlo en otro archivo hace que se actualice
+    uno y no el otro.
+
+    **Una entrada sin motivo no cuenta.** Ni una cadena vacía ni sólo espacios:
+    lo que convierte una versión vieja en una decisión es la explicación, y sin
+    ella esto sería un interruptor para apagar el guardia de a una biblioteca
+    por vez —que es peor que apagarlo entero, porque no se ve—.
+    """
+    # Los dos niveles se comprueban, no sólo el de adentro: un `"vasak": null`
+    # en el manifiesto hace que `.get` devuelva `None`, y encadenar el segundo
+    # `.get` sobre eso revienta con `AttributeError`. O sea que un manifiesto
+    # raro no dejaría al guardia sin declaraciones —que es lo correcto— sino
+    # que voltearía la corrida entera, y con un error que no nombra la causa.
+    seccion = manifiesto.get("vasak")
+    if not isinstance(seccion, dict):
+        return {}
+
+    declarado = seccion.get("bibliotecasAtrasadas")
+    if not isinstance(declarado, dict):
+        return {}
+    return {
+        nombre: motivo.strip()
+        for nombre, motivo in declarado.items()
+        if isinstance(motivo, str) and motivo.strip()
+    }
+
+
 def resueltas(candado):
     """Qué versión quedó fijada para cada paquete, según el texto de `bun.lock`.
 
@@ -152,10 +198,11 @@ def ultima_publicada(nombre):
 def revisar(manifiesto, fijadas=None, consultar=None):
     """Las propias que no son la última, separadas por qué hay que hacerles.
 
-    Devuelve cuatro listas: las que el **rango** no puede alcanzar, las que el
+    Devuelve cinco listas: las que el **rango** no puede alcanzar, las que el
     rango alcanza pero el **candado** dejó atrás, las que no se pudieron
-    ordenar porque hay una preliberación de por medio, y las que no se
-    pudieron consultar. Son tres cosas distintas y el aviso de cada una es distinto:
+    ordenar porque hay una preliberación de por medio, las que no se pudieron
+    consultar, y las que el repositorio **declaró** que se quedan atrás con su
+    motivo escrito. Son tres cosas distintas y el aviso de cada una es distinto:
     la primera se arregla editando el manifiesto, la segunda con `bun update`,
     y la tercera no se arregla, se vuelve a intentar.
 
@@ -175,7 +222,8 @@ def revisar(manifiesto, fijadas=None, consultar=None):
         fijadas = {}
 
     fuera_de_rango, candado_atrasado = [], []
-    sin_comparar, sin_respuesta = [], []
+    sin_comparar, sin_respuesta, declaradas_atras = [], [], []
+    a_proposito = atrasadas_a_proposito(manifiesto)
 
     for nombre, rango in sorted(declaradas(manifiesto).items()):
         if not nombre.startswith(PROPIAS):
@@ -195,16 +243,33 @@ def revisar(manifiesto, fijadas=None, consultar=None):
             continue
 
         if not alcanza(rango, ultima):
-            fuera_de_rango.append((nombre, rango, ultima))
+            # Declarada atrás con su motivo: se sigue diciendo, deja de cortar.
+            # No se `continue` antes de acá a propósito: una excepción no puede
+            # saltearse la consulta al registro, porque entonces dejaría de
+            # verse el día que la biblioteca publique algo que sí se puede
+            # tomar.
+            if nombre in a_proposito:
+                declaradas_atras.append((nombre, rango, ultima, a_proposito[nombre]))
+            else:
+                fuera_de_rango.append((nombre, rango, ultima))
             continue
 
         # Sin candado no hay nada que comparar. No es lo mismo que estar al
         # día, pero tampoco es un atraso: lo dice `main` aparte, para no
         # afirmar que se comprobó algo que no se comprobó.
         if fijada and partes(fijada) < partes(ultima):
-            candado_atrasado.append((nombre, fijada, ultima))
+            if nombre in a_proposito:
+                declaradas_atras.append((nombre, fijada, ultima, a_proposito[nombre]))
+            else:
+                candado_atrasado.append((nombre, fijada, ultima))
 
-    return fuera_de_rango, candado_atrasado, sin_comparar, sin_respuesta
+    return (
+        fuera_de_rango,
+        candado_atrasado,
+        sin_comparar,
+        sin_respuesta,
+        declaradas_atras,
+    )
 
 
 def main(argv=None):
@@ -239,9 +304,13 @@ def main(argv=None):
     except FileNotFoundError:
         fijadas = None
 
-    fuera_de_rango, candado_atrasado, sin_comparar, sin_respuesta = revisar(
-        manifiesto, fijadas=fijadas, consultar=None
-    )
+    (
+        fuera_de_rango,
+        candado_atrasado,
+        sin_comparar,
+        sin_respuesta,
+        declaradas_atras,
+    ) = revisar(manifiesto, fijadas=fijadas, consultar=None)
 
     for nombre, motivo in sin_respuesta:
         # El registro caído no puede cortar la corrida: no dice nada sobre el
@@ -273,6 +342,16 @@ def main(argv=None):
             f"es {elegido.candado}. Se arregla con `bun update {nombre}`."
         )
 
+    for nombre, tenemos, ultima, motivo in declaradas_atras:
+        # Como aviso y no como nota al pie: una excepción que no se ve es una
+        # excepción que nadie va a revisar, y el día que el motivo deje de
+        # valer nadie se va a enterar. Lleva el motivo puesto para que se pueda
+        # discutir sin ir a buscar el archivo.
+        print(
+            f"::warning::{nombre} se queda en {tenemos} y la última publicada "
+            f"es {ultima}. Declarado en vasak.bibliotecasAtrasadas: {motivo}"
+        )
+
     if fijadas is None:
         # No es lo mismo que estar al día. Sin esto, un repositorio sin candado
         # leería «las bibliotecas propias están al día» habiendo comprobado la
@@ -283,7 +362,7 @@ def main(argv=None):
         )
 
     if not fuera_de_rango and not candado_atrasado:
-        if sin_respuesta or sin_comparar or fijadas is None:
+        if sin_respuesta or sin_comparar or fijadas is None or declaradas_atras:
             # Decir «están al día» después de avisar que algo no se pudo
             # comprobar es afirmar algo que no se comprobó, y las dos líneas
             # juntas se contradicen: se lee la segunda y se olvida la primera.
