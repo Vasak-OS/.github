@@ -1,10 +1,21 @@
 #!/usr/bin/env python3
-"""Avisa cuando una biblioteca propia quedó fuera del alcance de su rango.
+"""Avisa cuando una biblioteca propia no es la que se va a empaquetar.
 
-En una versión `0.x` el acento **fija la minor**: `^0.7.2` acepta la 0.7.9 y
-**no** acepta la 0.8.0. Y un candado que ya satisface el rango no se mueve
-solo, así que `bun install` resuelve 0.7.x sin decir nada y la receta empaqueta
-con eso.
+Son **dos** formas de quedarse atrás y el arreglo de cada una es distinto:
+
+1. **El rango no alcanza.** En una versión `0.x` el acento fija la minor:
+   `^0.7.2` acepta la 0.7.9 y **no** acepta la 0.8.0. Hay que editar el
+   `package.json`.
+2. **El rango alcanza y el candado no se movió.** `^1.0.0` sí admite la 1.4.0,
+   pero un candado que ya satisface el rango **no se mueve solo**: `bun install`
+   resuelve la 1.0.0 sin decir nada y la receta empaqueta con eso. Alcanza con
+   `bun update`.
+
+La segunda es la más silenciosa: el rango está bien escrito y no hay ningún
+archivo que mirar y encontrar mal. Este guardia miró sólo la primera hasta que
+el barrido del 2026-09-22 encontró once repositorios atrasados **con el guardia
+en verde** —y uno de ellos había migrado setenta y un iconos a un componente
+cuatro minors viejo sin enterarse—.
 
 El resultado es que nada falla. La aplicación compila, pasa sus pruebas y se
 publica, y simplemente se queda con los componentes de hace ocho versiones: lo
@@ -28,6 +39,14 @@ import urllib.request
 
 PROPIAS = "@vasakgroup/"
 REGISTRO = "https://registry.npmjs.org/"
+
+#: Una entrada de la sección de paquetes de `bun.lock`:
+#: ``"nombre": ["nombre@1.2.3", "", { ... }, "sha512-..."],``
+#: La clave con barra —``"a/b"``— es una copia anidada, no la del árbol de
+#: arriba, y por eso se exige que sea igual al nombre del paquete.
+ENTRADA_DEL_CANDADO = re.compile(
+    r'^\s*"(?P<clave>[^"]+)":\s*\[\s*"(?P<resuelto>[^"]+)"', re.MULTILINE
+)
 
 
 def partes(version):
@@ -77,6 +96,29 @@ def declaradas(manifiesto):
     return todas
 
 
+def resueltas(candado):
+    """Qué versión quedó fijada para cada paquete, según el texto de `bun.lock`.
+
+    Se lee con una expresión regular y no con `json.load` porque el candado de
+    bun lleva comas finales: es JSON para leer, no para parsear.
+
+    Sólo entran las entradas cuya clave es **exactamente** el nombre del
+    paquete. Una clave con barra —``"vite/esbuild"``— es una copia anidada que
+    convive con la de arriba, y tomarla sería informar una versión que no es la
+    que usa la aplicación.
+    """
+    fijadas = {}
+    for entrada in ENTRADA_DEL_CANDADO.finditer(candado or ""):
+        clave, resuelto = entrada.group("clave"), entrada.group("resuelto")
+        nombre, _, version = resuelto.rpartition("@")
+        # `rpartition` sobre `@scope/paquete` sin versión deja el nombre vacío:
+        # pasa con los enlaces al espacio de trabajo, que no tienen versión que
+        # comprobar.
+        if nombre == clave and partes(version):
+            fijadas[clave] = version
+    return fijadas
+
+
 def ultima_publicada(nombre):
     """La versión que el registro marca como `latest`.
 
@@ -88,8 +130,18 @@ def ultima_publicada(nombre):
         return json.load(respuesta)["dist-tags"]["latest"]
 
 
-def revisar(manifiesto, consultar=None):
-    """Las propias que quedaron fuera de alcance, y las que no se pudieron ver.
+def revisar(manifiesto, fijadas=None, consultar=None):
+    """Las propias que no son la última, separadas por qué hay que hacerles.
+
+    Devuelve tres listas: las que el **rango** no puede alcanzar, las que el
+    rango alcanza pero el **candado** dejó atrás, y las que no se pudieron
+    consultar. Son tres cosas distintas y el aviso de cada una es distinto:
+    la primera se arregla editando el manifiesto, la segunda con `bun update`,
+    y la tercera no se arregla, se vuelve a intentar.
+
+    Una que está fuera de rango **no** se cuenta además como candado atrasado:
+    es la misma biblioteca y el mismo arreglo, y decirlo dos veces con dos
+    instrucciones distintas confunde cuál seguir.
 
     `consultar` se puede reemplazar para probar esto sin red. Se resuelve acá
     adentro y no en la firma a propósito: un valor por omisión se fija cuando
@@ -99,8 +151,10 @@ def revisar(manifiesto, consultar=None):
     """
     if consultar is None:
         consultar = ultima_publicada
+    if fijadas is None:
+        fijadas = {}
 
-    atrasadas, sin_respuesta = [], []
+    fuera_de_rango, candado_atrasado, sin_respuesta = [], [], []
 
     for nombre, rango in sorted(declaradas(manifiesto).items()):
         if not nombre.startswith(PROPIAS):
@@ -110,19 +164,37 @@ def revisar(manifiesto, consultar=None):
         except Exception as error:
             sin_respuesta.append((nombre, str(error)))
             continue
-        if not alcanza(rango, ultima):
-            atrasadas.append((nombre, rango, ultima))
 
-    return atrasadas, sin_respuesta
+        if not alcanza(rango, ultima):
+            fuera_de_rango.append((nombre, rango, ultima))
+            continue
+
+        fijada = fijadas.get(nombre)
+        # Sin candado no hay nada que comparar. No es lo mismo que estar al
+        # día, pero tampoco es un atraso: lo dice `main` aparte, para no
+        # afirmar que se comprobó algo que no se comprobó.
+        if fijada and partes(fijada) < partes(ultima):
+            candado_atrasado.append((nombre, fijada, ultima))
+
+    return fuera_de_rango, candado_atrasado, sin_respuesta
 
 
 def main(argv=None):
     opciones = argparse.ArgumentParser(description=__doc__)
     opciones.add_argument("--manifiesto", default="package.json")
+    opciones.add_argument("--candado", default="bun.lock")
     opciones.add_argument(
         "--cortar",
         action="store_true",
-        help="Salir con error en vez de sólo avisar.",
+        help="Salir con error en vez de sólo avisar. No alcanza al candado.",
+    )
+    opciones.add_argument(
+        "--el-candado-corta",
+        action="store_true",
+        help=(
+            "Que un candado atrasado también corte. Se pide aparte porque "
+            "encenderlo pone en rojo a repositorios que hoy pasan."
+        ),
     )
     elegido = opciones.parse_args(argv)
 
@@ -133,30 +205,62 @@ def main(argv=None):
         print(f"No hay {elegido.manifiesto}; no hay nada que comprobar.")
         return 0
 
-    atrasadas, sin_respuesta = revisar(manifiesto)
+    try:
+        with open(elegido.candado, encoding="utf-8") as archivo:
+            fijadas = resueltas(archivo.read())
+    except FileNotFoundError:
+        fijadas = None
+
+    fuera_de_rango, candado_atrasado, sin_respuesta = revisar(
+        manifiesto, fijadas=fijadas, consultar=None
+    )
 
     for nombre, motivo in sin_respuesta:
         # El registro caído no puede cortar la corrida: no dice nada sobre el
         # código del PR.
         print(f"::warning::No se pudo consultar {nombre} ({motivo}); no se comprobó.")
 
-    if not atrasadas:
-        if sin_respuesta:
-            # Decir «están al día» después de avisar que una no se pudo
-            # consultar es afirmar algo que no se comprobó, y las dos líneas
+    for nombre, rango, ultima in fuera_de_rango:
+        print(
+            f"::warning::{nombre} declara {rango} y la última publicada es "
+            f"{ultima}. El rango no puede llegar: hay que subirlo a mano en "
+            f"{elegido.manifiesto}."
+        )
+
+    for nombre, fijada, ultima in candado_atrasado:
+        # El rango está bien y aun así se empaqueta lo viejo. Decirlo con el
+        # comando puesto, porque el arreglo no es el mismo que el de arriba y
+        # el aviso anterior mandaba a editar el manifiesto — que acá no hay
+        # nada que editar.
+        print(
+            f"::warning::{nombre} se empaqueta en {fijada} y la última "
+            f"publicada es {ultima}. El rango sí alcanza: lo que quedó atrás "
+            f"es {elegido.candado}. Se arregla con `bun update {nombre}`."
+        )
+
+    if fijadas is None:
+        # No es lo mismo que estar al día. Sin esto, un repositorio sin candado
+        # leería «las bibliotecas propias están al día» habiendo comprobado la
+        # mitad, que es la forma de mentir que este guardia vino a evitar.
+        print(
+            f"::warning::No hay {elegido.candado}; no se comprobó qué versión "
+            f"se empaqueta de verdad."
+        )
+
+    if not fuera_de_rango and not candado_atrasado:
+        if sin_respuesta or fijadas is None:
+            # Decir «están al día» después de avisar que algo no se pudo
+            # comprobar es afirmar algo que no se comprobó, y las dos líneas
             # juntas se contradicen: se lee la segunda y se olvida la primera.
-            print("Ninguna de las que se pudieron consultar está atrasada.")
+            print("Ninguna de las que se pudieron comprobar está atrasada.")
         else:
             print("Las bibliotecas propias están al día.")
         return 0
 
-    for nombre, rango, ultima in atrasadas:
-        print(
-            f"::warning::{nombre} declara {rango} y la última publicada es "
-            f"{ultima}. El rango no puede llegar: hay que subirlo a mano."
-        )
-
-    return 1 if elegido.cortar else 0
+    corta = (fuera_de_rango and elegido.cortar) or (
+        candado_atrasado and elegido.el_candado_corta
+    )
+    return 1 if corta else 0
 
 
 if __name__ == "__main__":

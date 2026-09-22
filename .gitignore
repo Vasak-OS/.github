@@ -1,0 +1,5 @@
+# Lo deja `python3 -m unittest` al correr las pruebas del guardia. Estaban
+# versionados: el `.pyc` de una versión de Python no le sirve a otra, y el de
+# acá era de la 3.14.
+__pycache__/
+*.pyc

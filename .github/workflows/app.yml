@@ -52,12 +52,22 @@ on:
         default: ''
       bibliotecas_cortan:
         description: >
-          Si una biblioteca propia atrasada corta la corrida en vez de sólo
-          avisar. Empieza en falso a propósito: al estrenarse esta comprobación
-          quince repositorios estaban atrás, y hacerla fallar de entrada habría
-          bloqueado todo el trabajo —incluido el de ponerse al día—. Cada
-          repositorio que se pone al día lo enciende, y así no se vuelve a
-          quedar atrás.
+          Si una biblioteca propia **fuera del alcance de su rango** corta la
+          corrida en vez de sólo avisar. Empieza en falso a propósito: al
+          estrenarse esta comprobación quince repositorios estaban atrás, y
+          hacerla fallar de entrada habría bloqueado todo el trabajo —incluido
+          el de ponerse al día—. Cada repositorio que se pone al día lo
+          enciende, y así no se vuelve a quedar atrás.
+        type: boolean
+        default: false
+      candado_corta:
+        description: >
+          Si un candado atrasado —el rango alcanza y `bun.lock` se quedó en una
+          versión vieja— también corta. Va aparte de `bibliotecas_cortan` y
+          empieza en falso por el mismo motivo que aquél empezó así: el día que
+          esta comprobación se estrenó había once repositorios en esa
+          situación **con el guardia en verde**, y encenderla junto con la otra
+          les habría bloqueado el próximo PR antes de poder ponerse al día.
         type: boolean
         default: false
 
@@ -171,7 +181,9 @@ jobs:
           # aparecería en un PR que no los tocó. Se saca apenas se usa, y el
           # código de salida se conserva a mano porque `rm` lo pisaría.
           estado=0
-          python3 .vasak-ci/scripts/bibliotecas_al_dia.py ${{ inputs.bibliotecas_cortan && '--cortar' || '' }} || estado=$?
+          python3 .vasak-ci/scripts/bibliotecas_al_dia.py \
+            ${{ inputs.bibliotecas_cortan && '--cortar' || '' }} \
+            ${{ inputs.candado_corta && '--el-candado-corta' || '' }} || estado=$?
           rm -rf .vasak-ci
           exit $estado
 
