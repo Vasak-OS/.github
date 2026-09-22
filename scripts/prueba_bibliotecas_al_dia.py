@@ -10,6 +10,7 @@ import os
 import unittest
 
 from bibliotecas_al_dia import (
+    atrasadas_a_proposito,
     alcanza,
     declaradas,
     es_preliberacion,
@@ -115,7 +116,7 @@ class QueMira(unittest.TestCase):
 
     def test_lo_que_esta_al_dia_no_aparece(self):
         manifiesto = {"dependencies": {"@vasakgroup/x": "^1.0.0"}}
-        fuera, candado, _, sin_respuesta = revisar(
+        fuera, candado, _, sin_respuesta, _ = revisar(
             manifiesto,
             fijadas={"@vasakgroup/x": "1.4.0"},
             consultar=lambda n: "1.4.0",
@@ -136,7 +137,7 @@ class CuandoElRegistroNoContesta(unittest.TestCase):
             raise OSError("sin red")
 
         manifiesto = {"dependencies": {"@vasakgroup/x": "^0.1.0"}}
-        fuera, candado, _, sin_respuesta = revisar(manifiesto, consultar=se_cae)
+        fuera, candado, _, sin_respuesta, _ = revisar(manifiesto, consultar=se_cae)
 
         self.assertEqual(fuera, [])
         self.assertEqual(candado, [])
@@ -372,7 +373,7 @@ class CuandoHayUnaPreliberacion(unittest.TestCase):
     def test_dos_preliberaciones_distintas_no_se_dan_por_iguales(self):
         # El caso exacto del hallazgo: sin esto, `partes()` las ve iguales y
         # el candado atrasado no aparece.
-        _, atrasado, sin_comparar, _ = revisar(
+        _, atrasado, sin_comparar, *_ = revisar(
             {"dependencies": {"@vasakgroup/x": "^1.0.0"}},
             fijadas={"@vasakgroup/x": "1.4.0-beta.1"},
             consultar=lambda n: "1.4.0-beta.2",
@@ -387,7 +388,7 @@ class CuandoHayUnaPreliberacion(unittest.TestCase):
         # La misma ceguera estaba del otro lado: `alcanza('^0.19.0', ...)` se
         # apoya en los mismos tres números. Si no se pueden ordenar, no se
         # contesta ni que alcanza ni que no.
-        fuera, _, sin_comparar, _ = revisar(
+        fuera, _, sin_comparar, *_ = revisar(
             {"dependencies": {"@vasakgroup/x": "^0.19.0"}},
             fijadas={"@vasakgroup/x": "0.19.0"},
             consultar=lambda n: "1.0.0-rc.1",
@@ -409,7 +410,7 @@ class CuandoHayUnaPreliberacion(unittest.TestCase):
 
     def test_y_una_version_normal_se_sigue_comparando(self):
         # El guardia no se vuelve mudo por las dudas: sin guion, compara.
-        _, atrasado, sin_comparar, _ = revisar(
+        _, atrasado, sin_comparar, *_ = revisar(
             {"dependencies": {"@vasakgroup/x": "^1.0.0"}},
             fijadas={"@vasakgroup/x": "1.0.0"},
             consultar=lambda n: "1.4.0",
@@ -417,6 +418,115 @@ class CuandoHayUnaPreliberacion(unittest.TestCase):
 
         self.assertEqual(sin_comparar, [])
         self.assertEqual(atrasado, [("@vasakgroup/x", "1.0.0", "1.4.0")])
+
+
+class UnAtrasoDeclaradoConMotivo(unittest.TestCase):
+    """Quedarse atrás a propósito, dicho y no escondido.
+
+    La premisa del guardia —«quedarse atrás en una biblioteca propia no lo
+    decide nadie»— tenía un hueco, y apareció el 2026-09-22: la 2.7.0 de
+    `plugin-config-manager` declara `pinia: ^4.0.0` y `vasak-file-manager` está
+    en pinia 3, así que subir el rango arrastraba un salto mayor ajeno al
+    cambio. Sin forma de declararlo había que apagar el guardia para el
+    repositorio entero —y perder la vigilancia sobre `vue-libvasak`, que es para
+    lo que existe—.
+    """
+
+    MANIFIESTO = {
+        "dependencies": {"@vasakgroup/x": "~1.0.0"},
+        "vasak": {"bibliotecasAtrasadas": {"@vasakgroup/x": "la 1.4 pide pinia 4"}},
+    }
+
+    def test_un_rango_que_no_alcanza_deja_de_cortar_si_esta_declarado(self):
+        fuera, _, _, _, declaradas = revisar(
+            self.MANIFIESTO, consultar=lambda n: "1.4.0"
+        )
+
+        self.assertEqual(fuera, [], "declarado, no cuenta como atraso a arreglar")
+        self.assertEqual(
+            declaradas,
+            [("@vasakgroup/x", "~1.0.0", "1.4.0", "la 1.4 pide pinia 4")],
+        )
+
+    def test_pero_se_sigue_avisando_con_el_motivo_puesto(self):
+        # No se silencia: se deja de cortar. Una excepción que no se ve es una
+        # que nadie va a revisar el día que el motivo deje de valer.
+        salida = ComoTermina.correr(
+            self, self.MANIFIESTO, consultar=lambda n: "1.4.0", banderas=["--cortar"]
+        )
+
+        self.assertIn("la 1.4 pide pinia 4", salida)
+        self.assertIn("vasak.bibliotecasAtrasadas", salida)
+        self.assertEqual(self.salida_de_main, 0)
+
+    def test_y_no_dice_que_estan_al_dia(self):
+        # Porque no lo están. Decirlo sería la forma de mentir que este guardia
+        # vino a evitar, sólo que con permiso.
+        salida = ComoTermina.correr(
+            self, self.MANIFIESTO, consultar=lambda n: "1.4.0", banderas=["--cortar"]
+        )
+
+        self.assertNotIn("están al día", salida)
+
+    def test_una_declaracion_sin_motivo_no_vale(self):
+        # Lo que convierte una versión vieja en una decisión es la explicación.
+        # Sin ella esto sería un interruptor para apagar el guardia de a una
+        # biblioteca por vez, que es peor que apagarlo entero porque no se ve.
+        for vacio in ("", "   ", None, 42):
+            with self.subTest(motivo=vacio):
+                manifiesto = {
+                    "dependencies": {"@vasakgroup/x": "~1.0.0"},
+                    "vasak": {"bibliotecasAtrasadas": {"@vasakgroup/x": vacio}},
+                }
+                fuera, _, _, _, declaradas = revisar(
+                    manifiesto, consultar=lambda n: "1.4.0"
+                )
+
+                self.assertEqual(declaradas, [])
+                self.assertEqual(len(fuera), 1, "sigue contando como atraso")
+
+    def test_declarar_una_no_tapa_a_las_demas(self):
+        # El error que haría inútil todo esto: una excepción que se lleve
+        # puestas las otras bibliotecas del mismo repositorio.
+        manifiesto = {
+            "dependencies": {
+                "@vasakgroup/x": "~1.0.0",
+                "@vasakgroup/vue-libvasak": "^0.7.0",
+            },
+            "vasak": {"bibliotecasAtrasadas": {"@vasakgroup/x": "un motivo"}},
+        }
+        fuera, _, _, _, declaradas = revisar(manifiesto, consultar=lambda n: "1.4.0")
+
+        self.assertEqual([n for n, *_ in declaradas], ["@vasakgroup/x"])
+        self.assertEqual(
+            [n for n, *_ in fuera],
+            ["@vasakgroup/vue-libvasak"],
+            "la otra sigue cortando",
+        )
+
+    def test_tambien_cubre_el_candado_atrasado(self):
+        # El otro atraso: el rango alcanza y el candado no se movió. Si la
+        # excepción no lo cubriera, declarar el motivo arreglaría la mitad y el
+        # repositorio seguiría en rojo por la otra, sin nada que hacer.
+        manifiesto = {
+            "dependencies": {"@vasakgroup/x": "^1.0.0"},
+            "vasak": {"bibliotecasAtrasadas": {"@vasakgroup/x": "un motivo"}},
+        }
+        _, atrasado, _, _, declaradas = revisar(
+            manifiesto, fijadas={"@vasakgroup/x": "1.0.0"}, consultar=lambda n: "1.4.0"
+        )
+
+        self.assertEqual(atrasado, [])
+        self.assertEqual(len(declaradas), 1)
+
+    def test_sin_la_seccion_no_pasa_nada(self):
+        # Lo normal: casi ningún repositorio la va a tener.
+        self.assertEqual(atrasadas_a_proposito({}), {})
+        self.assertEqual(atrasadas_a_proposito({"vasak": {}}), {})
+        self.assertEqual(
+            atrasadas_a_proposito({"vasak": {"bibliotecasAtrasadas": "no es un objeto"}}),
+            {},
+        )
 
 
 if __name__ == "__main__":
