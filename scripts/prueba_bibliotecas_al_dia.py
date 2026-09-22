@@ -9,7 +9,14 @@ avisa y nadie se entera — que es exactamente el fallo que vino a evitar.
 import os
 import unittest
 
-from bibliotecas_al_dia import alcanza, declaradas, main, resueltas, revisar
+from bibliotecas_al_dia import (
+    alcanza,
+    declaradas,
+    es_preliberacion,
+    main,
+    resueltas,
+    revisar,
+)
 
 
 def candado(fijadas):
@@ -102,13 +109,13 @@ class QueMira(unittest.TestCase):
                 "vue": "^3.0.0",
             }
         }
-        fuera, _, _ = revisar(manifiesto, consultar=lambda n: "9.9.9")
+        fuera, *_ = revisar(manifiesto, consultar=lambda n: "9.9.9")
 
         self.assertEqual([n for n, _, _ in fuera], ["@vasakgroup/vue-libvasak"])
 
     def test_lo_que_esta_al_dia_no_aparece(self):
         manifiesto = {"dependencies": {"@vasakgroup/x": "^1.0.0"}}
-        fuera, candado, sin_respuesta = revisar(
+        fuera, candado, _, sin_respuesta = revisar(
             manifiesto,
             fijadas={"@vasakgroup/x": "1.4.0"},
             consultar=lambda n: "1.4.0",
@@ -129,7 +136,7 @@ class CuandoElRegistroNoContesta(unittest.TestCase):
             raise OSError("sin red")
 
         manifiesto = {"dependencies": {"@vasakgroup/x": "^0.1.0"}}
-        fuera, candado, sin_respuesta = revisar(manifiesto, consultar=se_cae)
+        fuera, candado, _, sin_respuesta = revisar(manifiesto, consultar=se_cae)
 
         self.assertEqual(fuera, [])
         self.assertEqual(candado, [])
@@ -249,7 +256,7 @@ class LoQueSeEmpaquetaDeVerdad(unittest.TestCase):
     def test_el_rango_alcanza_y_aun_asi_esta_atrasada(self):
         # El caso entero. `^1.0.0` admite la 1.4.0 y el candado dice 1.0.0.
         manifiesto = {"dependencies": {"@vasakgroup/x": "^1.0.0"}}
-        fuera, atrasado, _ = revisar(
+        fuera, atrasado, *_ = revisar(
             manifiesto,
             fijadas={"@vasakgroup/x": "1.0.0"},
             consultar=lambda n: "1.4.0",
@@ -263,7 +270,7 @@ class LoQueSeEmpaquetaDeVerdad(unittest.TestCase):
         # manda a editar el manifiesto y a correr `bun update`, y sólo una de
         # las dos sirve.
         manifiesto = {"dependencies": {"@vasakgroup/x": "^0.19.0"}}
-        fuera, atrasado, _ = revisar(
+        fuera, atrasado, *_ = revisar(
             manifiesto,
             fijadas={"@vasakgroup/x": "0.19.0"},
             consultar=lambda n: "1.4.0",
@@ -275,7 +282,7 @@ class LoQueSeEmpaquetaDeVerdad(unittest.TestCase):
     def test_el_candado_adelantado_no_es_un_atraso(self):
         # Pasa entre que se publica y que el registro lo marca como `latest`,
         # y también con una versión que se dio de baja.
-        _, atrasado, _ = revisar(
+        _, atrasado, *_ = revisar(
             {"dependencies": {"@vasakgroup/x": "^1.0.0"}},
             fijadas={"@vasakgroup/x": "1.5.0"},
             consultar=lambda n: "1.4.0",
@@ -284,7 +291,7 @@ class LoQueSeEmpaquetaDeVerdad(unittest.TestCase):
         self.assertEqual(atrasado, [])
 
     def test_de_terceros_no_se_mira_tampoco_acá(self):
-        _, atrasado, _ = revisar(
+        _, atrasado, *_ = revisar(
             {"dependencies": {"vue": "^3.0.0"}},
             fijadas={"vue": "3.0.0"},
             consultar=lambda n: "3.5.43",
@@ -340,6 +347,76 @@ class QueCortaYQueNo(unittest.TestCase):
 
         self.assertIn("bun update @vasakgroup/x", salida)
         self.assertNotIn("hay que subirlo a mano", salida)
+
+
+class CuandoHayUnaPreliberacion(unittest.TestCase):
+    """Dos versiones que este guardia no sabe ordenar.
+
+    `partes()` se queda con los tres números, así que la `1.4.0-beta.1` y la
+    `1.4.0-beta.2` le salen iguales — y ahí la comparación del candado daría
+    «al día» sin haber comparado nada. Lo marcó la revisión de CodeRabbit.
+
+    Ordenarlas bien es implementar la precedencia de SemVer entera, y ninguno
+    de los diez paquetes propios publicó una preliberación nunca: 81 versiones,
+    cero con guion. Así que no se compara y **se dice**, que es lo que este
+    guardia ya hace con el registro caído y con el candado que no está.
+    """
+
+    def test_reconoce_la_etiqueta(self):
+        self.assertTrue(es_preliberacion("1.4.0-beta.1"))
+        self.assertTrue(es_preliberacion("0.19.0-rc.1"))
+        self.assertFalse(es_preliberacion("1.4.0"))
+        self.assertFalse(es_preliberacion(""))
+        self.assertFalse(es_preliberacion(None))
+
+    def test_dos_preliberaciones_distintas_no_se_dan_por_iguales(self):
+        # El caso exacto del hallazgo: sin esto, `partes()` las ve iguales y
+        # el candado atrasado no aparece.
+        _, atrasado, sin_comparar, _ = revisar(
+            {"dependencies": {"@vasakgroup/x": "^1.0.0"}},
+            fijadas={"@vasakgroup/x": "1.4.0-beta.1"},
+            consultar=lambda n: "1.4.0-beta.2",
+        )
+
+        self.assertEqual(atrasado, [])
+        self.assertEqual(
+            sin_comparar, [("@vasakgroup/x", "1.4.0-beta.1", "1.4.0-beta.2")]
+        )
+
+    def test_tampoco_se_juzga_el_rango_contra_una_preliberacion(self):
+        # La misma ceguera estaba del otro lado: `alcanza('^0.19.0', ...)` se
+        # apoya en los mismos tres números. Si no se pueden ordenar, no se
+        # contesta ni que alcanza ni que no.
+        fuera, _, sin_comparar, _ = revisar(
+            {"dependencies": {"@vasakgroup/x": "^0.19.0"}},
+            fijadas={"@vasakgroup/x": "0.19.0"},
+            consultar=lambda n: "1.0.0-rc.1",
+        )
+
+        self.assertEqual(fuera, [])
+        self.assertEqual([n for n, _, _ in sin_comparar], ["@vasakgroup/x"])
+
+    def test_no_dice_que_estan_al_dia_si_no_pudo_comparar(self):
+        salida = ComoTermina.correr(
+            self,
+            {"dependencies": {"@vasakgroup/x": "^1.0.0"}},
+            consultar=lambda n: "1.4.0-beta.2",
+            candado=candado({"@vasakgroup/x": "1.4.0-beta.1"}),
+        )
+
+        self.assertIn("no sabe ordenarlas", salida)
+        self.assertNotIn("están al día", salida)
+
+    def test_y_una_version_normal_se_sigue_comparando(self):
+        # El guardia no se vuelve mudo por las dudas: sin guion, compara.
+        _, atrasado, sin_comparar, _ = revisar(
+            {"dependencies": {"@vasakgroup/x": "^1.0.0"}},
+            fijadas={"@vasakgroup/x": "1.0.0"},
+            consultar=lambda n: "1.4.0",
+        )
+
+        self.assertEqual(sin_comparar, [])
+        self.assertEqual(atrasado, [("@vasakgroup/x", "1.0.0", "1.4.0")])
 
 
 if __name__ == "__main__":

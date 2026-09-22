@@ -55,6 +55,25 @@ def partes(version):
     return tuple(int(x) for x in encontrado.groups()) if encontrado else None
 
 
+def es_preliberacion(version):
+    """Si la versión trae etiqueta de preliberación: `1.4.0-beta.1`.
+
+    `partes()` se queda con los tres números y tira lo que sigue, así que la
+    `1.4.0-beta.1` y la `1.4.0-beta.2` le salen iguales. Comparar dos
+    preliberaciones bien es implementar la precedencia de SemVer entera
+    —identificadores numéricos contra alfanuméricos, el que tiene menos campos
+    gana, y una preliberación va antes que su versión final— y ninguno de los
+    diez paquetes propios publicó una nunca: 81 versiones, cero con guion.
+
+    Así que en vez de adivinar, no se compara y se dice. Es el mismo criterio
+    que con el registro caído y con el candado que no está: este guardia
+    existe para no afirmar lo que no comprobó, y contestar «al día» sobre dos
+    versiones que no sabe ordenar sería justamente eso. El día que aparezca
+    una preliberación el aviso va a estar, con el caso de verdad delante.
+    """
+    return bool(re.match(r"\d+\.\d+\.\d+-", (version or "").strip()))
+
+
 def alcanza(rango, ultima):
     """Si el rango declarado puede llegar a resolver a `ultima`.
 
@@ -133,9 +152,10 @@ def ultima_publicada(nombre):
 def revisar(manifiesto, fijadas=None, consultar=None):
     """Las propias que no son la última, separadas por qué hay que hacerles.
 
-    Devuelve tres listas: las que el **rango** no puede alcanzar, las que el
-    rango alcanza pero el **candado** dejó atrás, y las que no se pudieron
-    consultar. Son tres cosas distintas y el aviso de cada una es distinto:
+    Devuelve cuatro listas: las que el **rango** no puede alcanzar, las que el
+    rango alcanza pero el **candado** dejó atrás, las que no se pudieron
+    ordenar porque hay una preliberación de por medio, y las que no se
+    pudieron consultar. Son tres cosas distintas y el aviso de cada una es distinto:
     la primera se arregla editando el manifiesto, la segunda con `bun update`,
     y la tercera no se arregla, se vuelve a intentar.
 
@@ -154,7 +174,8 @@ def revisar(manifiesto, fijadas=None, consultar=None):
     if fijadas is None:
         fijadas = {}
 
-    fuera_de_rango, candado_atrasado, sin_respuesta = [], [], []
+    fuera_de_rango, candado_atrasado = [], []
+    sin_comparar, sin_respuesta = [], []
 
     for nombre, rango in sorted(declaradas(manifiesto).items()):
         if not nombre.startswith(PROPIAS):
@@ -165,18 +186,25 @@ def revisar(manifiesto, fijadas=None, consultar=None):
             sin_respuesta.append((nombre, str(error)))
             continue
 
+        fijada = fijadas.get(nombre)
+
+        # Antes que nada: si no se pueden ordenar, no se ordenan. Las dos
+        # comprobaciones de abajo se apoyan en comparar los tres números.
+        if es_preliberacion(ultima) or es_preliberacion(fijada):
+            sin_comparar.append((nombre, fijada or rango, ultima))
+            continue
+
         if not alcanza(rango, ultima):
             fuera_de_rango.append((nombre, rango, ultima))
             continue
 
-        fijada = fijadas.get(nombre)
         # Sin candado no hay nada que comparar. No es lo mismo que estar al
         # día, pero tampoco es un atraso: lo dice `main` aparte, para no
         # afirmar que se comprobó algo que no se comprobó.
         if fijada and partes(fijada) < partes(ultima):
             candado_atrasado.append((nombre, fijada, ultima))
 
-    return fuera_de_rango, candado_atrasado, sin_respuesta
+    return fuera_de_rango, candado_atrasado, sin_comparar, sin_respuesta
 
 
 def main(argv=None):
@@ -211,7 +239,7 @@ def main(argv=None):
     except FileNotFoundError:
         fijadas = None
 
-    fuera_de_rango, candado_atrasado, sin_respuesta = revisar(
+    fuera_de_rango, candado_atrasado, sin_comparar, sin_respuesta = revisar(
         manifiesto, fijadas=fijadas, consultar=None
     )
 
@@ -219,6 +247,13 @@ def main(argv=None):
         # El registro caído no puede cortar la corrida: no dice nada sobre el
         # código del PR.
         print(f"::warning::No se pudo consultar {nombre} ({motivo}); no se comprobó.")
+
+    for nombre, tenemos, ultima in sin_comparar:
+        print(
+            f"::warning::{nombre} está en {tenemos} y la última publicada es "
+            f"{ultima}. Hay una preliberación de por medio y este guardia no "
+            f"sabe ordenarlas: no se comprobó."
+        )
 
     for nombre, rango, ultima in fuera_de_rango:
         print(
@@ -248,7 +283,7 @@ def main(argv=None):
         )
 
     if not fuera_de_rango and not candado_atrasado:
-        if sin_respuesta or fijadas is None:
+        if sin_respuesta or sin_comparar or fijadas is None:
             # Decir «están al día» después de avisar que algo no se pudo
             # comprobar es afirmar algo que no se comprobó, y las dos líneas
             # juntas se contradicen: se lee la segunda y se olvida la primera.
