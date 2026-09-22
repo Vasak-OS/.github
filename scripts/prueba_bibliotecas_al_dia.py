@@ -528,6 +528,24 @@ class UnAtrasoDeclaradoConMotivo(unittest.TestCase):
             {},
         )
 
+    def test_una_seccion_rara_no_voltea_la_corrida(self):
+        # Se comprueban los dos niveles y no sólo el de adentro: con
+        # `"vasak": null`, el primer `.get` devuelve `None` y encadenar el
+        # segundo sobre eso revienta con `AttributeError`. Un manifiesto raro
+        # tiene que dejar al guardia sin declaraciones, no voltear la corrida
+        # con un error que ni siquiera nombra la causa.
+        for rara in (None, "una cadena", 42, ["una", "lista"]):
+            with self.subTest(vasak=rara):
+                self.assertEqual(atrasadas_a_proposito({"vasak": rara}), {})
+
+        # Y entero, pasando por `revisar`, que es por donde entra de verdad.
+        fuera, _, _, _, declaradas = revisar(
+            {"dependencies": {"@vasakgroup/x": "~1.0.0"}, "vasak": None},
+            consultar=lambda n: "1.4.0",
+        )
+        self.assertEqual(declaradas, [])
+        self.assertEqual(len(fuera), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

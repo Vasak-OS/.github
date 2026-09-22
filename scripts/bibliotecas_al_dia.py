@@ -142,7 +142,16 @@ def atrasadas_a_proposito(manifiesto):
     ella esto sería un interruptor para apagar el guardia de a una biblioteca
     por vez —que es peor que apagarlo entero, porque no se ve—.
     """
-    declarado = manifiesto.get("vasak", {}).get("bibliotecasAtrasadas", {})
+    # Los dos niveles se comprueban, no sólo el de adentro: un `"vasak": null`
+    # en el manifiesto hace que `.get` devuelva `None`, y encadenar el segundo
+    # `.get` sobre eso revienta con `AttributeError`. O sea que un manifiesto
+    # raro no dejaría al guardia sin declaraciones —que es lo correcto— sino
+    # que voltearía la corrida entera, y con un error que no nombra la causa.
+    seccion = manifiesto.get("vasak")
+    if not isinstance(seccion, dict):
+        return {}
+
+    declarado = seccion.get("bibliotecasAtrasadas")
     if not isinstance(declarado, dict):
         return {}
     return {
