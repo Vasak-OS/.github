@@ -84,8 +84,10 @@ on:
       SONAR_TOKEN:
         description: >
           El token de SonarQube Cloud. Opcional: sin él, el análisis se saltea
-          y lo dice. Llega sólo si quien llama pone `secrets: inherit`, y nunca
-          llega a un PR que viene de un fork, que es lo correcto.
+          y lo dice. Llega sólo si quien llama lo pasa por nombre —no con
+          `secrets: inherit`, que le daría también el token de crates.io y el de
+          npm a un trabajo que instala dependencias de terceros—, y nunca llega
+          a un PR que viene de un fork, que es lo correcto.
         required: false
 
 jobs:
@@ -529,8 +531,8 @@ jobs:
   # mitades y además sabe cuánto de lo que cambia un PR está probado.
   #
   # Sin `SONAR_TOKEN` se saltea y lo dice, en vez de fallar: un PR desde un
-  # fork no recibe secretos, y un repositorio que todavía no pasa
-  # `secrets: inherit` tampoco.
+  # fork no recibe secretos, y un repositorio que todavía no pasa el token
+  # tampoco.
   sonar:
     runs-on: ubuntu-latest
     permissions:
@@ -544,7 +546,7 @@ jobs:
           if [ -n "$SONAR_TOKEN" ]; then
             echo "hay=true" >> "$GITHUB_OUTPUT"
           else
-            echo "Sin SONAR_TOKEN: se saltea el análisis. Quien llama tiene que poner «secrets: inherit»."
+            echo "Sin SONAR_TOKEN: se saltea el análisis. Quien llama tiene que pasarlo en «secrets»."
           fi
 
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
