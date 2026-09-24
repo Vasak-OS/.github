@@ -19,7 +19,39 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
 
       - name: Pruebas de los scripts
         working-directory: scripts
         run: python3 -m unittest discover -p 'prueba_*.py' -v
+
+      # Los workflows también son código, y uno roto acá no falla en este
+      # repositorio: falla en los treinta y pico que lo llaman, al próximo PR
+      # de cada uno. actionlint lo agarra antes —claves mal escritas,
+      # expresiones que no existen, un `needs` a un trabajo que no está—.
+      - name: Los workflows se leen bien
+        run: |
+          set -euo pipefail
+          version=1.7.12
+          suma=8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+          paquete="$RUNNER_TEMP/actionlint.tar.gz"
+          curl -fsSL -o "$paquete" \
+            "https://github.com/rhysd/actionlint/releases/download/v$version/actionlint_${version}_linux_amd64.tar.gz"
+          echo "$suma  $paquete" | sha256sum -c --quiet -
+          tar -xzf "$paquete" -C "$RUNNER_TEMP" actionlint
+          "$RUNNER_TEMP/actionlint" -color .github/workflows/*.yml
+
+  # El flujo compartido, corrido sobre este mismo repositorio. No tiene
+  # frontend ni Rust, así que la mayoría de los pasos se saltean; lo que sí
+  # corre es lo que no depende del lenguaje —la seguridad de los workflows, el
+  # camino de Sonar sin token— y ése es justo el que podría romperse en los
+  # treinta y pico a la vez sin que nadie lo vea. Con `./` corre la versión del
+  # PR, no la de `main`.
+  app:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/app.yml
+    with:
+      rust: false
+      seguridad_corta: true
