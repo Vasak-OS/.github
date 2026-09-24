@@ -48,10 +48,16 @@ jobs:
   # camino de Sonar sin token— y ése es justo el que podría romperse en los
   # treinta y pico a la vez sin que nadie lo vea. Con `./` corre la versión del
   # PR, no la de `main`.
+  #
+  # zizmor pide la forma `$/` que GitHub sumó en julio de 2026, pero actionlint
+  # todavía no la conoce y la da por mal escrita. En un `uses` de trabajo el
+  # riesgo que cubre `$/` —cargar algo que un paso anterior dejó en disco— no
+  # existe, porque se resuelve antes de que corra nada. Cuando actionlint la
+  # acepte, se cambia y se va el ignore.
   app:
     permissions:
       contents: read
-    uses: ./.github/workflows/app.yml
+    uses: ./.github/workflows/app.yml # zizmor: ignore[self-repository]
     with:
       rust: false
       seguridad_corta: true
