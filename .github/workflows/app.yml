@@ -70,6 +70,25 @@ on:
           les habría bloqueado el próximo PR antes de poder ponerse al día.
         type: boolean
         default: false
+      seguridad_corta:
+        description: >
+          Si una vulnerabilidad conocida en las dependencias —o un problema en
+          los propios workflows— corta la corrida en vez de sólo avisar. Empieza
+          en falso por lo mismo que las otras dos: el día que se estrenó, el
+          escritorio solo ya traía once avisos, casi todos de la pila de GTK 3
+          que arrastra Tauri y que no tienen arreglo publicado. Cada repositorio
+          que quede en cero lo enciende.
+        type: boolean
+        default: false
+    secrets:
+      SONAR_TOKEN:
+        description: >
+          El token de SonarQube Cloud. Opcional: sin él, el análisis se saltea
+          y lo dice. Llega sólo si quien llama lo pasa por nombre —no con
+          `secrets: inherit`, que le daría también el token de crates.io y el de
+          npm a un trabajo que instala dependencias de terceros—, y nunca llega
+          a un PR que viene de un fork, que es lo correcto.
+        required: false
 
 jobs:
   revisar:
@@ -90,6 +109,10 @@ jobs:
       # mismo commit que ya usa el flujo de publicación de este taller.
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
+          # Sin dejar el token en `.git/config`: acá nada empuja, y un token
+          # guardado en disco es un token que cualquier paso siguiente puede
+          # leer —una dependencia instalada, un script de prueba—.
+          persist-credentials: false
           # El paso de formato compara contra la base del PR, y para eso hace
           # falta el historial: el checkout por omisión trae un commit solo y
           # no habría con qué comparar.
@@ -165,6 +188,7 @@ jobs:
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           repository: Vasak-OS/.github
+          persist-credentials: false
           # `main` y no un commit fijo: los 35 repositorios llaman a este
           # flujo con `@main`, así que el script y el flujo se mueven juntos.
           # Clavarlo acá los separaría —el flujo nuevo con el script viejo— que
@@ -354,10 +378,219 @@ jobs:
 
       - name: Pruebas de Rust
         if: inputs.pruebas_rust != ''
+        # Por variable de entorno y no con `${{ }}` dentro del script: la
+        # plantilla se pega como texto en el bash antes de correr, así que un
+        # valor con `;` o `$( )` se ejecutaría. Viene de quien llama, que hoy
+        # es de confianza, pero es la forma de que no dependa de eso.
+        env:
+          PRUEBAS_RUST: ${{ inputs.pruebas_rust }}
         run: |
           # Sin `--all-targets`: alcanza con las pruebas, y compilar los
           # ejemplos y los benchmarks sería tiempo sin nada a cambio.
           dir=.
           [ -f src-tauri/Cargo.toml ] && [ ! -f Cargo.toml ] && dir=src-tauri
           cd "$dir"
-          cargo test ${{ inputs.pruebas_rust }}
+          # Sin comillas a propósito: son varios `-p crate` que tienen que
+          # llegar como argumentos separados.
+          # shellcheck disable=SC2086
+          cargo test $PRUEBAS_RUST
+
+  # ── Seguridad: las dependencias y los propios workflows ──────────────────
+  #
+  # Trabajo aparte y no pasos de `revisar` por dos motivos. Uno, que las
+  # reglas de `main` exigen `app / revisar` y nada más: esto se estrena
+  # avisando, y si viviera ahí adentro un aviso mal calibrado frenaría todos
+  # los merges de la organización. Dos, que corre en paralelo y no le suma
+  # minutos a la revisión.
+  seguridad:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      # OSV lee los dos candados que se empaquetan —`bun.lock` y
+      # `Cargo.lock`— contra la base de osv.dev, que junta los avisos de
+      # GitHub, de RustSec y de npm. Una sola herramienta para las dos mitades
+      # del taller, en vez de `cargo audit` por un lado y otra cosa por el otro.
+      #
+      # Ojo que RustSec también publica los crates **sin mantenimiento**, y
+      # buena parte de lo que sale en una aplicación de Tauri es eso: la pila
+      # de GTK 3 que Tauri trae y que no tiene reemplazo mientras Tauri no lo
+      # cambie. Por eso esto avisa y no corta hasta que cada repositorio lo
+      # pida.
+      - name: Vulnerabilidades conocidas en las dependencias
+        env:
+          CORTA: ${{ inputs.seguridad_corta }}
+        run: |
+          set -uo pipefail
+
+          mapfile -t candados < <(git ls-files '*bun.lock' '*Cargo.lock' '*package-lock.json')
+          if [ ${#candados[@]} -eq 0 ]; then
+            echo "Este repositorio no versiona ningún candado; nada que comprobar."
+            exit 0
+          fi
+
+          # Clavado a la versión y al hash, por lo mismo que las acciones van
+          # clavadas al commit: lo que se baja acá se ejecuta.
+          version=v2.6.0
+          suma=ca69b3d3cd08f889a49dc0a383122f71cc528b83803671df5fd874d97485b108
+          binario="$RUNNER_TEMP/osv-scanner"
+          curl -fsSL -o "$binario" \
+            "https://github.com/google/osv-scanner/releases/download/$version/osv-scanner_linux_amd64" || {
+            echo "::error::No se pudo bajar osv-scanner; el paso no llegó a mirar nada."
+            exit 1
+          }
+          echo "$suma  $binario" | sha256sum -c --quiet - || {
+            echo "::error::El binario de osv-scanner no coincide con el hash esperado."
+            exit 1
+          }
+          chmod +x "$binario"
+
+          argumentos=()
+          for candado in "${candados[@]}"; do
+            argumentos+=(--lockfile "$candado")
+          done
+
+          # Los códigos de salida de osv-scanner separan «encontró algo» (1) de
+          # «no pudo» (127) y de «no había paquetes» (128). Tratarlos igual
+          # daría verde sin haber mirado, que es peor que no tener el paso.
+          estado=0
+          "$binario" scan source "${argumentos[@]}" --format table || estado=$?
+          case "$estado" in
+            0|128)
+              echo "Sin vulnerabilidades conocidas en: ${candados[*]}." ;;
+            1)
+              if [ "$CORTA" = "true" ]; then
+                echo "::error::Hay dependencias con avisos publicados. El detalle está arriba."
+                exit 1
+              fi
+              echo "::warning::Hay dependencias con avisos publicados. Por ahora sólo avisa: el detalle está en el log de «seguridad»." ;;
+            *)
+              echo "::error::osv-scanner no pudo terminar (salió con $estado); el paso no llegó a mirar nada."
+              exit 1 ;;
+          esac
+
+      # zizmor lee los workflows del repositorio buscando lo que ya mordió a
+      # otros proyectos: acciones sin clavar, inyección por plantilla, tokens
+      # que quedan en disco, permisos de más.
+      - name: Los workflows del repositorio
+        if: hashFiles('.github/workflows/*.yml', '.github/workflows/*.yaml') != ''
+        env:
+          CORTA: ${{ inputs.seguridad_corta }}
+        run: |
+          set -uo pipefail
+
+          # Los flujos propios se llaman con `@main` **a propósito** —los treinta
+          # y pico repositorios se mueven juntos con este archivo, ver arriba—,
+          # así que para `Vasak-OS/*` alcanza con una referencia. Para todo lo
+          # demás, el hash.
+          configuracion="$RUNNER_TEMP/zizmor.yml"
+          cat > "$configuracion" <<'CONF'
+          rules:
+            unpinned-uses:
+              config:
+                policies:
+                  "Vasak-OS/*": ref-pin
+                  "*": hash-pin
+          CONF
+
+          # `--min-severity low` deja afuera los informativos, que son
+          # sugerencias —«preferí la publicación de confianza»— y no problemas:
+          # con ellos, este aviso saldría en amarillo en casi todos lados y se
+          # dejaría de leer.
+          #
+          # `--offline`: las auditorías que consultan la API de GitHub piden un
+          # token, y éste es un trabajo de sólo lectura que no lo necesita.
+          estado=0
+          pipx run zizmor==1.30.1 --offline --min-severity low --config "$configuracion" \
+            --format github .github/workflows || estado=$?
+
+          # zizmor sale con 0 si no encontró nada, con 10 o más si encontró
+          # (según la gravedad), y con 1 o 2 si no pudo correr.
+          if [ "$estado" -eq 0 ]; then
+            echo "Sin hallazgos en los workflows."
+          elif [ "$estado" -ge 10 ]; then
+            if [ "$CORTA" = "true" ]; then
+              echo "::error::zizmor encontró problemas en los workflows; están anotados en el PR."
+              exit 1
+            fi
+            echo "::warning::zizmor encontró problemas en los workflows. Por ahora sólo avisa."
+          else
+            echo "::error::zizmor no pudo correr (salió con $estado); el paso no llegó a mirar nada."
+            exit 1
+          fi
+
+  # ── SonarQube Cloud ──────────────────────────────────────────────────────
+  #
+  # Ya había ocho proyectos en la organización `vasakos` de SonarQube Cloud,
+  # pero en análisis automático: ése no mira Rust —medido, el escritorio sale
+  # con cero líneas de Rust— ni puede leer cobertura. Desde CI mira las dos
+  # mitades y además sabe cuánto de lo que cambia un PR está probado.
+  #
+  # Sin `SONAR_TOKEN` se saltea y lo dice, en vez de fallar: un PR desde un
+  # fork no recibe secretos, y un repositorio que todavía no pasa el token
+  # tampoco.
+  sonar:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Hay token
+        id: token
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          if [ -n "$SONAR_TOKEN" ]; then
+            echo "hay=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Sin SONAR_TOKEN: se saltea el análisis. Quien llama tiene que pasarlo en «secrets»."
+          fi
+
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        if: steps.token.outputs.hay == 'true'
+        with:
+          persist-credentials: false
+          # Sonar asigna cada línea a su commit para saber qué es código nuevo,
+          # y para eso necesita el historial entero.
+          fetch-depth: 0
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        if: steps.token.outputs.hay == 'true' && hashFiles('package.json') != ''
+
+      # La cobertura se saca acá y no en `revisar` para no tocar el trabajo que
+      # exigen las reglas de `main`. Cuesta correr las pruebas dos veces, en
+      # paralelo; a cambio, un problema de cobertura nunca frena un merge.
+      - name: Cobertura del frontend
+        if: steps.token.outputs.hay == 'true' && hashFiles('package.json') != ''
+        run: |
+          bun install --frozen-lockfile
+          # Sólo donde el script es exactamente `bun test`: ahí se le puede
+          # sumar la cobertura sin cambiar qué corre. Un script armado a mano
+          # —un bucle, otro ejecutor— se respeta y queda sin cobertura, que es
+          # mejor que medir algo distinto de lo que se prueba.
+          guion=$(bun -e 'const p = await Bun.file("package.json").json(); console.log(p.scripts?.test ?? "")')
+          if [ "$guion" = "bun test" ]; then
+            # Si alguna prueba falla, la cobertura igual sirve: el rojo lo
+            # marca `revisar`, que es donde corresponde.
+            bun test --coverage --coverage-reporter=lcov --coverage-dir=coverage \
+              || echo "::warning::Hubo pruebas en rojo; la cobertura se sube igual."
+          else
+            echo "El script de pruebas no es «bun test» a secas («${guion:-ninguno}»); sin cobertura."
+          fi
+
+      - name: Análisis
+        if: steps.token.outputs.hay == 'true'
+        uses: SonarSource/sonarqube-scan-action@ba9859eae8dd6bd29e412f25ddbbef3d032000f4 # v8.2.2
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          # La clave del proyecto sigue la forma que usa SonarQube Cloud al
+          # importar desde GitHub, que es la que ya tienen los ocho de antes.
+          args: >
+            -Dsonar.organization=vasakos
+            -Dsonar.projectKey=Vasak-OS_${{ github.event.repository.name }}
+            -Dsonar.exclusions=**/node_modules/**,**/target/**,**/dist/**,**/coverage/**,src-tauri/gen/**
+            -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
