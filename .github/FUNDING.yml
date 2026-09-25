@@ -1,0 +1,14 @@
+# El botón «Sponsor» de GitHub. Vive en el repositorio `.github` de la
+# organización, así que aparece en todos los repositorios que no traigan uno
+# propio: son cuarenta y pico, y uno solo acá no se desactualiza en ninguno.
+#
+# Los medios son los mismos que publica https://os.vasak.net.ar/donate/ y su
+# funding.json. GitHub acepta a lo sumo cuatro enlaces en `custom`, así que
+# Lemon y las direcciones cripto quedan detrás del enlace a la página, que las
+# muestra enteras y con botón para copiarlas —copiarlas de un botón de GitHub
+# no se puede, y una dirección cripto mal copiada es plata perdida—.
+ko_fi: vasakos
+custom:
+  - https://os.vasak.net.ar/donate/
+  - https://link.mercadopago.com.ar/joaquindecima
+  - https://paypal.me/joaquindecima
