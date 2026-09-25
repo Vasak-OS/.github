@@ -22,6 +22,16 @@ Que los manifiestos coincidan **entre sí** no se mira acá: eso ya lo comprueba
 el paso «Los manifiestos dicen la misma versión» de `app.yml` en cada PR. Lo que
 nadie miraba es la etiqueta, que no está en ningún manifiesto y se escribe a
 mano en el momento de publicar.
+
+**Dónde vive la versión no es una sola cosa**, y por eso la búsqueda tiene
+cuatro escalones en vez de abrir un archivo. Tauri la acepta escrita de tres
+formas —el número, una ruta a un `package.json`, o nada y la hereda de Cargo— y
+encima la configuración de Linux puede pisar a la base. Cargo suma la suya: en
+un workspace el miembro dice `version.workspace = true` y el número está en
+`[workspace.package]` de la raíz, que es como están `vasak-store` y
+`vasak-permissions`. Equivocarse en cualquiera de esos escalones no se ve: el
+guardia diría que no sabe qué versión es y cortaría un release perfectamente
+válido.
 """
 
 import argparse
@@ -32,6 +42,7 @@ import sys
 import tomllib
 from pathlib import Path
 
+LINUX_CONF = Path("src-tauri/tauri.linux.conf.json")
 TAURI_CONF = Path("src-tauri/tauri.conf.json")
 TAURI_CARGO = Path("src-tauri/Cargo.toml")
 ROOT_CARGO = Path("Cargo.toml")
@@ -47,8 +58,50 @@ def strip_prefix(tag: str) -> str:
     return tag[1:] if re.fullmatch(r"v\d.*", tag) else tag
 
 
+def json_version(path: Path) -> str | None:
+    """La versión que declara un `tauri.conf.json`, o None si no declara.
+
+    `version` puede ser el número **o una ruta a un `package.json`**, que es una
+    forma que Tauri acepta y que acá se leería como si la versión fuese
+    `"../package.json"`: el guardia compararía la etiqueta contra el texto de
+    una ruta y cortaría un release que estaba bien.
+    """
+    if not path.is_file():
+        return None
+    try:
+        declared = json.loads(path.read_text(encoding="utf-8")).get("version")
+    except json.JSONDecodeError as error:
+        print(f"::error::{path} no se pudo leer: {error}")
+        return None
+
+    if not isinstance(declared, str) or not declared:
+        return None
+    if not declared.endswith(".json"):
+        return declared
+
+    # La ruta es relativa al archivo que la nombra, no al directorio desde el
+    # que corre esto.
+    target = path.parent / declared
+    if not target.is_file():
+        print(f"::error::{path} apunta a {declared} y ese archivo no está.")
+        return None
+    try:
+        pointed = json.loads(target.read_text(encoding="utf-8")).get("version")
+    except json.JSONDecodeError as error:
+        print(f"::error::{target} no se pudo leer: {error}")
+        return None
+    return pointed if isinstance(pointed, str) and pointed else None
+
+
 def cargo_version(path: Path) -> str | None:
-    """La versión de un Cargo.toml, o None si la hereda del workspace."""
+    """La versión de un Cargo.toml, o None si la hereda del workspace.
+
+    Mira las dos tablas donde puede estar. `[package]` es la del miembro, y
+    `[workspace.package]` la que heredan los miembros que dicen
+    `version.workspace = true` — un workspace virtual, como los de
+    `vasak-store` y `vasak-permissions`, **no tiene `[package]`** y leer sólo
+    ésa devolvería que no hay versión en un repositorio que la tiene.
+    """
     if not path.is_file():
         return None
     try:
@@ -56,34 +109,36 @@ def cargo_version(path: Path) -> str | None:
     except tomllib.TOMLDecodeError as error:
         print(f"::error::No se pudo leer {path}: {error}")
         return None
-    version = data.get("package", {}).get("version")
+
     # `version.workspace = true` se lee como un diccionario, no como un número:
-    # devolverlo tal cual haría que la comparación de abajo fallara diciendo que
-    # la etiqueta no coincide con `{'workspace': True}`, que no ayuda a nadie.
-    return version if isinstance(version, str) else None
+    # devolverlo tal cual haría que la comparación fallara diciendo que la
+    # etiqueta no coincide con `{'workspace': True}`, que no ayuda a nadie.
+    own = data.get("package", {}).get("version")
+    if isinstance(own, str) and own:
+        return own
+
+    shared = data.get("workspace", {}).get("package", {}).get("version")
+    return shared if isinstance(shared, str) and shared else None
 
 
 def bundled_version(root: Path) -> tuple[str | None, str]:
     """La versión con la que va a quedar nombrado el `.deb`, y de dónde sale.
 
-    El orden es el de Tauri: manda `tauri.conf.json`, y cuando no declara
-    `version` cae al `Cargo.toml` de `src-tauri`. Copiarlo importa porque un
-    repositorio que no declare la versión en el JSON no está roto —Tauri
-    compila igual— y cortar ahí sería inventar una regla que Tauri no tiene.
+    El orden es el de Tauri: la configuración de Linux pisa a la base, manda el
+    JSON, y cuando no declara `version` se cae al `Cargo.toml` de `src-tauri` y
+    de ahí a la raíz. Copiarlo importa porque un repositorio que no declare la
+    versión en el JSON no está roto —Tauri compila igual— y cortar ahí sería
+    inventar una regla que Tauri no tiene.
     """
-    conf = root / TAURI_CONF
-    if conf.is_file():
-        try:
-            declared = json.loads(conf.read_text(encoding="utf-8")).get("version")
-        except json.JSONDecodeError as error:
-            return None, f"{TAURI_CONF} no se pudo leer: {error}"
-        if isinstance(declared, str) and declared:
-            return declared, str(TAURI_CONF)
-
-    for candidate in (root / TAURI_CARGO, root / ROOT_CARGO):
-        version = cargo_version(candidate)
+    for candidate in (LINUX_CONF, TAURI_CONF):
+        version = json_version(root / candidate)
         if version:
-            return version, str(candidate.relative_to(root))
+            return version, str(candidate)
+
+    for candidate in (TAURI_CARGO, ROOT_CARGO):
+        version = cargo_version(root / candidate)
+        if version:
+            return version, str(candidate)
 
     return None, "ni tauri.conf.json ni Cargo.toml declaran una versión"
 

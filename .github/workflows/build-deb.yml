@@ -89,8 +89,18 @@ jobs:
 
       # Igual que en `app.yml`: el guardia vive en un archivo con pruebas y no
       # incrustado acá, porque lo que se puede equivocar en silencio es qué
-      # versión va a llevar el bundle. Se toma de `main` porque con `@main` se
-      # llama este mismo flujo, y clavarlo separaría el script del flujo.
+      # versión va a llevar el bundle.
+      #
+      # Se toma de `main` porque con `@main` se llama este mismo flujo, y
+      # clavarlo separaría el script del flujo.
+      #
+      # Lo correcto sería `job.workflow_sha`, que es el commit de **este**
+      # archivo: `main` es lo que haya en `main` cuando corre el paso, así que
+      # un merge en el medio le daría a esta corrida el flujo viejo con el
+      # script nuevo. Pero actionlint 1.7.12 no conoce ese contexto todavía y
+      # lo da por mal escrito, y el paso que lo corre corta. La ventana es de
+      # segundos y esto se dispara con un release, así que se espera: cuando
+      # actionlint lo acepte, se cambia acá y en `app.yml`, que tiene lo mismo.
       - name: Traer los scripts compartidos
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
