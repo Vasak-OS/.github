@@ -589,8 +589,20 @@ jobs:
         with:
           # La clave del proyecto sigue la forma que usa SonarQube Cloud al
           # importar desde GitHub, que es la que ya tienen los ocho de antes.
+          #
+          # Las pruebas se declaran como pruebas. Si no, Sonar las cuenta como
+          # código sin probar —nadie prueba las pruebas— y la cobertura del
+          # código nuevo se hunde justo en el PR que más pruebas suma: el
+          # primero que lo destapó tenía el código al 100% y salía con 47%. El
+          # taller las pone en `tests/` o con `.test.`/`.spec.` en el nombre, y
+          # las de integración de Rust en `tests/*.rs`. Un archivo no puede
+          # estar a la vez en las dos listas, así que van también en las
+          # exclusiones del código.
           args: >
             -Dsonar.organization=vasakos
             -Dsonar.projectKey=Vasak-OS_${{ github.event.repository.name }}
-            -Dsonar.exclusions=**/node_modules/**,**/target/**,**/dist/**,**/coverage/**,src-tauri/gen/**
+            -Dsonar.exclusions=**/node_modules/**,**/target/**,**/dist/**,**/coverage/**,src-tauri/gen/**,**/tests/**,**/*.test.*,**/*.spec.*
+            -Dsonar.tests=.
+            -Dsonar.test.inclusions=**/tests/**,**/*.test.*,**/*.spec.*
+            -Dsonar.test.exclusions=**/node_modules/**,**/target/**,**/dist/**
             -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
