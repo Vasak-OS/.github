@@ -102,6 +102,17 @@ pull request al repositorio que corresponda.
 Traducir también cuenta, y hace falta: las aplicaciones están preparadas para
 más idiomas de los que hoy tienen.
 
+## Cómo sostenerlo
+
+VasakOS no tiene una empresa detrás: lo sostienen quienes lo desarrollan y lo
+que aporta la comunidad. Lo que entra va a infraestructura —el sitio, los
+espejos de descarga, los servidores de compilación— y a equipos para probar el
+sistema en más máquinas.
+
+**[Donar](https://os.vasak.net.ar/donate/)** — Ko-fi, Mercado Pago, PayPal,
+Lemon, Ethereum (ETH o USDT) y Bitcoin, con la meta mensual y en qué se usa.
+El botón **Sponsor** de cada repositorio lleva a los mismos lugares.
+
 ## Seguridad
 
 Si encontrás una vulnerabilidad, **no abras un issue público**: usá el reporte

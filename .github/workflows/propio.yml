@@ -24,7 +24,11 @@ jobs:
 
       - name: Pruebas de los scripts
         working-directory: scripts
-        run: python3 -m unittest discover -p 'prueba_*.py' -v
+        # Dos patrones: las primeras pruebas se llamaron `prueba_*.py`, y las
+        # nuevas van con nombre en inglés, como todo identificador del taller.
+        run: |
+          python3 -m unittest discover -p 'prueba_*.py' -v
+          python3 -m unittest discover -p 'test_*.py' -v
 
       # Los workflows también son código, y uno roto acá no falla en este
       # repositorio: falla en los treinta y pico que lo llaman, al próximo PR
