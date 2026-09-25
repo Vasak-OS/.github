@@ -598,6 +598,13 @@ jobs:
           # las de integración de Rust en `tests/*.rs`. Un archivo no puede
           # estar a la vez en las dos listas, así que van también en las
           # exclusiones del código.
+          #
+          # Los `.vue` quedan fuera de la cobertura. Ninguna aplicación del
+          # taller monta componentes en las pruebas, así que esas líneas no las
+          # cubre ninguna prueba que hoy se pueda escribir, y una puerta que
+          # mide lo que nadie puede mover no informa: sólo bloquea el PR que
+          # toca la interfaz. Es una decisión, no un truco, y se saca el día
+          # que alguna aplicación monte componentes en las pruebas.
           args: >
             -Dsonar.organization=vasakos
             -Dsonar.projectKey=Vasak-OS_${{ github.event.repository.name }}
@@ -605,4 +612,5 @@ jobs:
             -Dsonar.tests=.
             -Dsonar.test.inclusions=**/tests/**,**/*.test.*,**/*.spec.*
             -Dsonar.test.exclusions=**/node_modules/**,**/target/**,**/dist/**
+            -Dsonar.coverage.exclusions=**/*.vue
             -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
