@@ -581,6 +581,97 @@ jobs:
             echo "El script de pruebas no es «bun test» a secas («${guion:-ninguno}»); sin cobertura."
           fi
 
+      # La cobertura de Rust, por el mismo motivo que la de arriba: fuera de
+      # `revisar`, para que un problema de cobertura no frene un merge.
+      #
+      # Antes no había cobertura de Rust en ningún workflow. `cargo test` corría
+      # y no dejaba informe, así que para todo el código de sistema —los
+      # daemons, los plugins Tauri en `src-tauri`, `vasak-permissions`,
+      # `vasak-keyring`, `vasak-accounts`— la regla de cobertura era imposible
+      # de cumplir.
+      - name: Cobertura de Rust
+        # El mismo gate que el paso de pruebas, y por el mismo motivo:
+        # `pruebas_rust` viene vacío por omisión porque un crate de Tauri
+        # arrastra webkit2gtk y medio escritorio. Un repo que no pide esas
+        # pruebas no las corre, y no se le puede medir cobertura de pruebas
+        # que no existen. Ahora usa el mismo gate que el paso de pruebas, y
+        # hoy son tres los repos que lo piden: `vasak-accounts`,
+        # `vasak-keyring` y `vasak-permissions`.
+        if: steps.token.outputs.hay == 'true' && inputs.pruebas_rust != ''
+        env:
+          PRUEBAS_RUST: ${{ inputs.pruebas_rust }}
+        run: |
+          # Se compila en vez de bajar un binario precompilado: `cargo-llvm-cov`
+          # tiene que hablar con el mismo LLVM que el `rustc` del runner, y un
+          # binario de otra versión falla al enlazar o, peor, mide mal. Cuesta
+          # un par de minutos una vez por job.
+          cargo install cargo-llvm-cov --locked
+
+          # El manifiesto: el de la raíz, o el de `src-tauri/` en las apps que
+          # no son workspace. Es el mismo criterio que usa el paso de pruebas.
+          manifiesto=Cargo.toml
+          [ -f Cargo.toml ] || manifiesto=src-tauri/Cargo.toml
+          base=''
+          [ "$manifiesto" = "src-tauri/Cargo.toml" ] && base=src-tauri
+
+          mkdir -p coverage
+          # Sin `--workspace`: qué se mide es lo que el repositorio declara que
+          # prueba, que es lo mismo que corre `revisar`. Medir de más o de menos
+          # que la suite es medir otra cosa.
+          # shellcheck disable=SC2086
+          cargo llvm-cov $PRUEBAS_RUST --manifest-path "$manifiesto" \
+            --lcov --output-path=coverage/rust.lcov \
+            || echo "::warning::Hubo pruebas en rojo; la cobertura de Rust se sube igual."
+
+          if [ ! -s coverage/rust.lcov ]; then
+            echo "::warning::No se pudo calcular la cobertura de Rust; se sube lo que haya."
+            exit 0
+          fi
+
+          # Las rutas del lcov tienen que ser relativas a la raíz del
+          # repositorio, que es desde donde Sonar escanea. En las apps cuyo
+          # manifiesto vive en `src-tauri/`, `cargo-llvm-cov` las emite
+          # relativas a `src-tauri/` —`SF:src/lib.rs` en vez de
+          # `SF:src-tauri/src/lib.rs`— y Sonar no las encuentra: el informe
+          # entra, no encuentra los archivos, y el panel muestra **0% sin
+          # decir por qué**. Es el mismo modo de fallo invisible que el paso de
+          # cobertura de `vasak-wireplumber-modules` rechaza a propósito, y
+          # que ya se cometió una vez al inventar `sonar.cfamily.lcov.reportPaths`,
+          # que no existe.
+          #
+          # Por eso se normaliza en vez de confiar: si la ruta tal cual no
+          # resuelve desde la raíz, se le antepone la base y se comprueba que
+          # ahora exista. Se adapta a lo que `cargo-llvm-cov` emita, que es
+          # justamente lo que no se pudo comprobar acá.
+          if [ -n "$base" ]; then
+            awk -v base="$base" '
+              /^SF:/ {
+                ruta = substr($0, 4)
+                # ya viene con la base: no hay que anteponerla dos veces
+                print (ruta ~ ("^" base "/")) ? $0 : "SF:" base "/" ruta
+                next
+              }
+              { print }
+            ' coverage/rust.lcov > coverage/rust.lcov.normalizado \
+              && mv coverage/rust.lcov.normalizado coverage/rust.lcov
+          fi
+
+          # Y la comprobación final: si ninguna ruta resuelve, el informe no
+          # sirve y hay que decirlo, no dejar que Sonar reporte 0% en silencio.
+          resolubles=0
+          while IFS= read -r ruta; do
+            [ -f "$ruta" ] && resolubles=$((resolubles + 1))
+          done < <(sed -n 's/^SF://p' coverage/rust.lcov)
+          total=$(sed -n 's/^SF://p' coverage/rust.lcov | wc -l)
+
+          if [ "$total" -eq 0 ]; then
+            echo "::warning::El lcov de Rust no tiene registros SF; se sube igual, pero no mide nada."
+          elif [ "$resolubles" -eq 0 ]; then
+            echo "::error::Ninguna de las $total rutas del lcov de Rust existe desde la raíz del repositorio. Sonar no va a encontrar los archivos y va a reportar 0% sin avisar. Primera: $(sed -n 's/^SF://p' coverage/rust.lcov | head -1)"
+          else
+            echo "Cobertura de Rust: $resolubles de $total rutas resuelven desde la raíz."
+          fi
+
       - name: Análisis
         if: steps.token.outputs.hay == 'true'
         uses: SonarSource/sonarqube-scan-action@ba9859eae8dd6bd29e412f25ddbbef3d032000f4 # v8.2.2
@@ -614,3 +705,10 @@ jobs:
             -Dsonar.test.exclusions=**/node_modules/**,**/target/**,**/dist/**
             -Dsonar.coverage.exclusions=**/*.vue
             -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
+            # La de Rust va en SU property, que es por lenguaje. Poner un lcov de
+            # Rust en `sonar.javascript.lcov.reportPaths` no lo importa, o lo
+            # importa como si fuera de otro lenguaje. Y `sonar.coverageReportPaths`
+            # —que suena a la genérica— no acepta lcov: acepta el formato
+            # genérico de `sonar-generic-coverage.xsd`, así que un lcov puesto
+            # ahí no importa nada y el panel muestra 0% sin explicar por qué.
+            -Dsonar.rust.lcov.reportPaths=coverage/rust.lcov
