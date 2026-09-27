@@ -566,7 +566,18 @@ jobs:
       - name: Cobertura del frontend
         if: steps.token.outputs.hay == 'true' && hashFiles('package.json') != ''
         run: |
+          # Sin `set -e` —los pasos de GitHub Actions corren con `bash -e` por
+          # omisión— y por lo mismo que el paso de Rust de más abajo: si
+          # `bun install` falla, el paso moría y con él el escaneo, dejando al
+          # repositorio sin análisis por un problema de dependencias. Eso es
+          # la ceguera que este trabajo tapa, no algo que haya que propagar.
+          set +e
           bun install --frozen-lockfile
+          if [ $? -ne 0 ]; then
+            echo "::warning::Falló «bun install»; la cobertura del frontend no se mide en esta corrida. El rojo de las pruebas lo marca «revisar», y el análisis sigue igual: Sonar va a ver 0% de cobertura en código nuevo, que es la cifra honesta."
+            exit 0
+          fi
+          set -e
           # Sólo donde el script es exactamente `bun test`: ahí se le puede
           # sumar la cobertura sin cambiar qué corre. Un script armado a mano
           # —un bucle, otro ejecutor— se respeta y queda sin cobertura, que es
@@ -595,6 +606,14 @@ jobs:
       # es que faltaran pruebas: en `vasak-accounts` hay 962 y cubren el 88% de
       # las líneas. Faltaba el número.
       - uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
+        # `continue-on-error` por la misma razón que el paso de abajo no lleva
+        # `set -e`, y es el otro lado de la misma moneda: el *script* de
+        # cobertura se traga sus fallos a propósito, pero si el paso que instala
+        # la herramienta falla, el trabajo muere antes de llegar al escaneo.
+        # Un corte de red, una release movida o un paquete renombrado
+        # dejarían al repositorio entero sin análisis —la misma ceguera que
+        # este paso vino a tapar, entrando por la puerta de atrás.
+        continue-on-error: true
         # Binario ya compilado, de segundos; `cargo install cargo-llvm-cov`
         # serían minutos, en un trabajo que corre en treinta y pico
         # repositorios.
