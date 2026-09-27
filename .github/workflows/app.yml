@@ -566,18 +566,20 @@ jobs:
       - name: Cobertura del frontend
         if: steps.token.outputs.hay == 'true' && hashFiles('package.json') != ''
         run: |
-          # Sin `set -e` —los pasos de GitHub Actions corren con `bash -e` por
-          # omisión— y por lo mismo que el paso de Rust de más abajo: si
-          # `bun install` falla, el paso moría y con él el escaneo, dejando al
-          # repositorio sin análisis por un problema de dependencias. Eso es
-          # la ceguera que este trabajo tapa, no algo que haya que propagar.
-          set +e
-          bun install --frozen-lockfile
-          if [ $? -ne 0 ]; then
+          # `if !` y no un `$?` después del comando, porque es lo que pide el
+          # shellcheck de este repositorio (SC2181) y porque además el `if` ya
+          # es un contexto protegido: el `set -e` implícito de los pasos de
+          # GitHub Actions no corta ahí. El paso de Rust de más abajo lleva el
+          # mismo cuidado.
+          #
+          # Lo que se evita: si `bun install` falla, el paso moría y con él el
+          # escaneo, dejando al repositorio sin análisis por un problema de
+          # dependencias. Eso es la ceguera que este trabajo tapa, no algo que
+          # haya que propagar.
+          if ! bun install --frozen-lockfile; then
             echo "::warning::Falló «bun install»; la cobertura del frontend no se mide en esta corrida. El rojo de las pruebas lo marca «revisar», y el análisis sigue igual: Sonar va a ver 0% de cobertura en código nuevo, que es la cifra honesta."
             exit 0
           fi
-          set -e
           # Sólo donde el script es exactamente `bun test`: ahí se le puede
           # sumar la cobertura sin cambiar qué corre. Un script armado a mano
           # —un bucle, otro ejecutor— se respeta y queda sin cobertura, que es
