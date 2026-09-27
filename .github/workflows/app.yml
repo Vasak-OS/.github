@@ -30,7 +30,11 @@
 #
 # No compila el backend de Rust todavía: un Tauri necesita webkit2gtk y medio
 # escritorio instalado, y eso es una tanda de apt de varios minutos en cada
-# corrida. Vale la pena sumarlo, pero como paso aparte y pensado.
+# corrida. Vale la pena sumarlo, pero como paso aparte y pensado. Ese paso ya
+# está —es la entrada `paquetes_rust`— y la lista la declara el repositorio
+# que la necesita, no este archivo: una lista fija de Tauri acá la pagarían los
+# treinta y pico que llaman, casi ninguno la usaría, y se quedaría vieja sola
+# el día que un grafo cambiara.
 
 name: Chequeos de aplicación
 
@@ -48,6 +52,23 @@ on:
           crate de Tauri arrastra webkit2gtk y medio escritorio, y eso son
           varios minutos de apt en cada corrida. Los que no dependen de Tauri
           compilan en un runner pelado y ahí sí conviene.
+        type: string
+        default: ''
+      paquetes_rust:
+        description: >
+          Paquetes de Debian que hay que instalar **antes** de `cargo test`, en
+          la forma que espera `apt-get install` (`uno dos`; también acepta una
+          lista de YAML de varias líneas, que se separa igual). Para los
+          repositorios cuyo grafo no compila en un runner pelado: los que
+          necesitan la lista de `libwebkit2gtk-4.1-dev` más `build-essential`
+          la piden, y el resto no la pasan. Vacío por omisión, y vacío no
+          instala nada —ni un `apt-get update`—, que es lo que lo hace gratis
+          para los treinta y pico que llaman. La lista la declara el
+          repositorio que la necesita y sale de los `.pc` que **su** grafo pide
+          de verdad, no de la lista de Tauri: acá no se puede saber qué
+          encabezados hacen falta sin compilar el crate, y una lista fija se
+          queda vieja sola. Es la misma razón por la que `vasak-shot` no la
+          tiene metida en su propio flujo.
         type: string
         default: ''
       bibliotecas_cortan:
@@ -376,6 +397,47 @@ jobs:
             exit 1
           fi
 
+      # ── Las dependencias de sistema que pide el grafo ────────────────────
+      #
+      # Un paso aparte y no unas líneas al principio del de pruebas, por dos
+      # motivos. Uno, que una tanda de apt son minutos y tienen que verse en un
+      # paso con su nombre: si comparte paso con `cargo test`, un fallo del
+      # `apt` y un fallo del `cargo` salen en el mismo bloque y se confunden.
+      # Dos, que la lista la declara el repositorio que la necesita
+      # (`paquetes_rust`) y no este archivo, porque los encabezados que faltan
+      # los decide el grafo de cada uno y acá no hay forma de averiguarlo.
+      #
+      # **Falla fuerte, y a propósito.** Este trabajo es la puerta que exigen
+      # las reglas de `main`, y la filosofía del taller —escrita en
+      # `vasak-wireplumber-modules`— es que un paso que no puede fallar no
+      # comprueba nada y hace creer que sí. acá el costo de tragarse el fallo
+      # además no es un falso verde sino un error de cargo a mitad del grafo y
+      # muy lejos de la causa: los `build.rs` de los `-sys` llaman a
+      # `process::exit(1)` cuando falta un `.pc`, así que se lee como un crate
+      # que no compila y no como un paquete que no estaba. El `set -e` que
+      # GitHub pone por omisión —del que este archivo entero depende desde su
+      # primer paso— es lo que hace que esto corte acá y no más abajo.
+      - name: Las dependencias de sistema de Rust
+        # Con `if:` y no con un `if` adentro del script, que es lo que deja los
+        # treinta y pico que no pasan la lista sin pagar ni un `apt-get update`.
+        # Un `apt-get update` cacheado en cada repositorio, en un flujo que
+        # corre todo el tiempo, es exactamente la regresión que se está
+        # evitando.
+        if: inputs.paquetes_rust != ''
+        # Por variable de entorno y no con `${{ }}` dentro del script, por lo
+        # mismo que el paso de abajo: la plantilla se pega como texto en el
+        # bash antes de correr, así que un valor con `;` o `$( )` se ejecutaría.
+        # Con una lista de paquetes el riesgo es el mismo y el premio el mismo.
+        env:
+          DEBIAN_FRONTEND: noninteractive
+          PAQUETES_RUST: ${{ inputs.paquetes_rust }}
+        run: |
+          sudo apt-get update
+          # Sin comillas a propósito, como el `cargo test` de más abajo: son
+          # varios paquetes y tienen que llegar como argumentos separados.
+          # shellcheck disable=SC2086
+          sudo apt-get install --no-install-recommends --yes $PAQUETES_RUST
+
       - name: Pruebas de Rust
         if: inputs.pruebas_rust != ''
         # Por variable de entorno y no con `${{ }}` dentro del script: la
@@ -641,6 +703,8 @@ jobs:
         # en el bash antes de correr, así que un valor con `;` o `$( )` se
         # ejecutaría.
         env:
+          DEBIAN_FRONTEND: noninteractive
+          PAQUETES_RUST: ${{ inputs.paquetes_rust }}
           PRUEBAS_RUST: ${{ inputs.pruebas_rust }}
         run: |
           # ── Por qué este paso no puede cortar la corrida ──────────────────
@@ -655,7 +719,8 @@ jobs:
           # nadie lo notara. Un paso de cobertura que puede tumbar el análisis
           # se sabotea a sí mismo.
           #
-          # Lo que sí hace es no mentir. Si la herramienta no está, si la
+          # Lo que sí hace es no mentir. Si la herramienta no está, si los
+          # paquetes que pide el grafo no se pudieron instalar, si la
           # compilación falla o si las pruebas quedan en rojo, avisa con un
           # `::warning::`, **borra** el informe y sigue. Borra, y no deja uno
           # vacío: un archivo que existe y no mide nada es peor que un archivo
@@ -678,6 +743,38 @@ jobs:
           # directory», que es un mensaje sobre un archivo que este paso es el
           # primero que nombra.
           mkdir -p "$raiz/coverage"
+
+          # Las dependencias de sistema que declara `paquetes_rust`, antes de
+          # intentar compilar nada: sin ellas un crate de Tauri muere en el
+          # `build.rs` de un `-sys` con un `process::exit(1)` y un error que no
+          # llega a decir «falta el paquete».
+          #
+          # **Avisa y sale, al revés que el paso hermano de `revisar`,** y por
+          # lo mismo que el `bun install` del paso de cobertura de más arriba:
+          # si el `apt` falla, este paso no puede producir un informe, y un paso
+          # de cobertura que no puede producir un informe no puede tumbar el
+          # escaneo. Sale con 0 **sin escribir la salida**, que es lo que
+          # sostiene el invariante que explica el comentario de más arriba: sin
+          # informe y sin propiedad, Sonar ve 0% de cobertura en el código nuevo
+          # y el análisis sigue igual.
+          #
+          # Y vacío no hace absolutamente nada —ni un `apt-get update`—, que es
+          # lo que deja gratis este paso para los que miden crates que compilan
+          # en un runner pelado.
+          if [ -n "$PAQUETES_RUST" ]; then
+            if ! sudo apt-get update; then
+              echo "::warning::Falló «apt-get update»; la cobertura de Rust no se mide en esta corrida. El análisis sigue igual, con 0% de cobertura en el código nuevo, que es la cifra honesta."
+              exit 0
+            fi
+            # Sin comillas a propósito, como el `cargo test` de más abajo y
+            # como el `apt-get install` del paso hermano de `revisar`: son
+            # varios paquetes y tienen que llegar como argumentos separados.
+            # shellcheck disable=SC2086
+            if ! sudo apt-get install --no-install-recommends --yes $PAQUETES_RUST; then
+              echo "::warning::No se pudieron instalar los paquetes que declara «paquetes_rust»; la cobertura de Rust sale sin medir. Si el fallo era de eso, el paso «Pruebas de Rust» de «revisar», que instala la misma lista y sí corta, lo dice con más contexto."
+              exit 0
+            fi
+          fi
 
           # La misma búsqueda de crate que el paso «Pruebas de Rust» de
           # `revisar`, copiada y no reescrita. Dos maneras de encontrar el
