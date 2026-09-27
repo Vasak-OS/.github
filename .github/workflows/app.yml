@@ -847,8 +847,27 @@ jobs:
             -Dsonar.organization=vasakos
             -Dsonar.projectKey=Vasak-OS_${{ github.event.repository.name }}
             -Dsonar.exclusions=**/node_modules/**,**/target/**,**/dist/**,**/coverage/**,src-tauri/gen/**,**/tests/**,**/*.test.*,**/*.spec.*
-            -Dsonar.tests=.
-            -Dsonar.test.inclusions=**/tests/**,**/*.test.*,**/*.spec.*
+            # `-Dsonar.tests=.` se quitó. Decía «todo el proyecto es código de
+            # prueba» y, junto con el `test.inclusions` de abajo, que sólo
+            # acepta `**/tests/**`, `*.test.*` y `*.spec.*`, dejaba **fuera del
+            # análisis todo archivo que no fuera de prueba**: en Sonar, un
+            # archivo dentro del ámbito de pruebas que no entra en
+            # `test.inclusions` no vuelve a ser código de producción, se
+            # descarta. Y como `test.inclusions` no distingue mayúsculas, el
+            # `pruebas/` de los repositorios en español tampoco entraba, así que
+            # en la práctica no entraba casi nada.
+            #
+            # Medido, no supuesto, sobre `vasak-update` con y sin esta línea:
+            #
+            #   con    `-Dsonar.tests=.`:  0 languages detected in 0 preprocessed
+            #                                files, 107 files ignored, 0 indexed
+            #   sin la línea:              2 languages detected in 13 preprocessed
+            #                                files, 0 ignored por patrón, 13 indexed
+            #
+            # Y el efecto no era sólo de conteo: sin archivos, el sensor de Rust
+            # ni siquiera arrancaba, y la cobertura de Rust que sube el paso de
+            # más arriba no tenía contra qué adjuntarse.
+            -Dsonar.test.inclusions=**/tests/**,**/test/**,**/pruebas/**,**/*.test.*,**/*.spec.*,**/tests.rs,**/*_test.rs
             -Dsonar.test.exclusions=**/node_modules/**,**/target/**,**/dist/**
             -Dsonar.coverage.exclusions=**/*.vue
             -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
