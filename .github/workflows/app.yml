@@ -566,9 +566,9 @@ jobs:
       - name: Cobertura del frontend
         if: steps.token.outputs.hay == 'true' && hashFiles('package.json') != ''
         run: |
-          # `if !` y no un `$?` después del comando, porque es lo que pide el
-          # shellcheck de este repositorio (SC2181) y porque además el `if` ya
-          # es un contexto protegido: el `set -e` implícito de los pasos de
+          # `if !` y no un `$?` después del comando: es la forma que pide el
+          # gate de este repositorio (SC2181), y además el `if` ya es un
+          # contexto protegido, así que el `set -e` implícito de los pasos de
           # GitHub Actions no corta ahí. El paso de Rust de más abajo lleva el
           # mismo cuidado.
           #
