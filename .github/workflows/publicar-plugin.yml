@@ -233,7 +233,7 @@ jobs:
           # el error caro: un 500 o un token vencido contestan «error», y
           # leerlos como «falta la versión» lleva a intentar publicar y a
           # reportar después un fallo de subida en vez del fallo real. Sólo
-          # E404 —el paquete no existe todavía— cuenta como falta.
+          # E404 cuenta como falta.
           salida=$(npm view "$NOMBRE@$VERSION" version 2>&1) && estado=0 || estado=$?
 
           if [ "$estado" = "0" ]; then
@@ -242,17 +242,29 @@ jobs:
               echo "resultado=ya estaba" >> "$GITHUB_OUTPUT"
               echo "$NOMBRE $VERSION ya está en npm."
             else
-              # El paquete existe y esa versión no: `npm view` sale bien y sin
-              # nada que decir.
+              # Así contestaba npm hasta la 10 cuando el paquete existe y esa
+              # versión no: sale bien y sin nada que decir.
               echo "falta=sí" >> "$GITHUB_OUTPUT"
-              echo "$NOMBRE $VERSION no está: se publica."
+              echo "$NOMBRE $VERSION es una versión nueva: se publica."
             fi
             exit 0
           fi
 
           if printf '%s' "$salida" | grep -q 'E404'; then
             echo "falta=sí" >> "$GITHUB_OUTPUT"
-            echo "$NOMBRE no existe todavía: primer publish."
+            # npm 11 contesta E404 tanto si falta el paquete entero como si
+            # falta sólo esta versión, y el mensaje decía «primer publish» en
+            # los dos casos (Vasak-OS/.github#17). La decisión es la misma —se
+            # publica—; lo que cambia es lo que lee quien mira la corrida, así
+            # que se pregunta por el paquete sin versión.
+            paquete=$(npm view "$NOMBRE" name 2>&1) && existe=0 || existe=$?
+            if [ "$existe" = "0" ]; then
+              echo "$NOMBRE $VERSION es una versión nueva: se publica."
+            elif printf '%s' "$paquete" | grep -q 'E404'; then
+              echo "$NOMBRE no existe todavía: primer publish."
+            else
+              echo "$NOMBRE $VERSION no está: se publica. No se pudo saber si el paquete ya existía."
+            fi
             exit 0
           fi
 
