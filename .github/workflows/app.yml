@@ -837,17 +837,20 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         if: steps.token.outputs.hay == 'true' && hashFiles('package.json') != ''
 
-      # La cobertura se saca acá y no en `revisar` para no tocar el trabajo que
-      # exigen las reglas de `main`. Cuesta correr las pruebas dos veces, en
-      # paralelo; a cambio, un problema de cobertura nunca frena un merge.
+      # La cobertura del frontend se saca acá y no en `revisar`: las pruebas
+      # de frontend corren dos veces —allá sin cobertura, acá con—, que en
+      # `bun test` son segundos. La de Rust, en cambio, sale de la corrida de
+      # `revisar` y llega como artefacto, porque compilar el grafo dos veces
+      # son minutos; por eso este trabajo espera a `revisar` en vez de correr
+      # en paralelo.
       - name: Cobertura del frontend
         if: steps.token.outputs.hay == 'true' && hashFiles('package.json') != ''
         run: |
           # `if !` y no un `$?` después del comando: es la forma que pide el
           # gate de este repositorio (SC2181), y además el `if` ya es un
           # contexto protegido, así que el `set -e` implícito de los pasos de
-          # GitHub Actions no corta ahí. El paso de Rust de más abajo lleva el
-          # mismo cuidado.
+          # GitHub Actions no corta ahí. El paso «Pruebas de Rust» de `revisar`
+          # lleva el mismo cuidado con los fallos de la cobertura.
           #
           # Lo que se evita: si `bun install` falla, el paso moría y con él el
           # escaneo, dejando al repositorio sin análisis por un problema de
