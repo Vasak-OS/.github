@@ -432,11 +432,18 @@ jobs:
           DEBIAN_FRONTEND: noninteractive
           PAQUETES_RUST: ${{ inputs.paquetes_rust }}
         run: |
-          sudo apt-get update
+          # Diez segundos por conexión y tres reintentos, en vez de los treinta
+          # por omisión. El espejo de Azure a veces deja una descarga colgada:
+          # medido en vasak-settings, siete paquetes esperaron treinta segundos
+          # cada uno antes de pasar al espejo siguiente, y la tanda de apt tardó
+          # 312 s cuando en el repositorio de al lado, con la misma lista, tardó
+          # 28. Con el tiempo corto el salto al otro espejo llega antes.
+          apt=(sudo apt-get -o Acquire::http::Timeout=10 -o Acquire::Retries=3)
+          "${apt[@]}" update
           # Sin comillas a propósito, como el `cargo test` de más abajo: son
           # varios paquetes y tienen que llegar como argumentos separados.
           # shellcheck disable=SC2086
-          sudo apt-get install --no-install-recommends --yes $PAQUETES_RUST
+          "${apt[@]}" install --no-install-recommends --yes $PAQUETES_RUST
 
       # ── El Rust que no se prueba, dicho en voz alta ──────────────────────
       #
