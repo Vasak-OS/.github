@@ -423,7 +423,15 @@ jobs:
         # Un `apt-get update` cacheado en cada repositorio, en un flujo que
         # corre todo el tiempo, es exactamente la regresión que se está
         # evitando.
-        if: inputs.paquetes_rust != ''
+        #
+        # `!cancelled()` en éste y en los pasos de Rust que siguen: corren
+        # aunque un paso anterior —el lint, los tipos, el formato— haya
+        # fallado. Sin esto, un `cargo fmt` pendiente se salteaba las pruebas
+        # de Rust, `sonar` analizaba sin el informe y el Rust desaparecía del
+        # análisis del PR justo en la corrida en la que había algo que
+        # corregir. El paso sigue en rojo igual; lo que cambia es que se sabe
+        # también cómo están las pruebas.
+        if: ${{ !cancelled() && inputs.paquetes_rust != '' }}
         # Por variable de entorno y no con `${{ }}` dentro del script, por lo
         # mismo que el paso de abajo: la plantilla se pega como texto en el
         # bash antes de correr, así que un valor con `;` o `$( )` se ejecutaría.
@@ -474,7 +482,7 @@ jobs:
       # de red en la instalación no puede dejar a `revisar` en rojo ni, peor,
       # sin correr las pruebas.
       - uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
-        if: inputs.pruebas_rust != ''
+        if: ${{ !cancelled() && inputs.pruebas_rust != '' }}
         continue-on-error: true
         # Binario ya compilado, de segundos. Al commit de la release y con la
         # versión explícita: el atajo `@cargo-llvm-cov` lo mueve la propia
@@ -489,13 +497,13 @@ jobs:
       # la leen y no la escriben, para que las ramas no se pisen el espacio
       # de caché del repositorio (10 GB) con compilaciones de una sola vez.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        if: inputs.pruebas_rust != ''
+        if: ${{ !cancelled() && inputs.pruebas_rust != '' }}
         with:
           workspaces: ${{ hashFiles('Cargo.toml') == '' && hashFiles('src-tauri/Cargo.toml') != '' && 'src-tauri' || '.' }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Pruebas de Rust
-        if: inputs.pruebas_rust != ''
+        if: ${{ !cancelled() && inputs.pruebas_rust != '' }}
         # Por variable de entorno y no con `${{ }}` dentro del script: la
         # plantilla se pega como texto en el bash antes de correr, así que un
         # valor con `;` o `$( )` se ejecutaría. Viene de quien llama, que hoy
@@ -650,7 +658,7 @@ jobs:
       # pasar —ni la propiedad, que `sonar` pone sólo si lo recibe—. Un día
       # de retención alcanza: lo lee el trabajo de al lado, minutos después.
       - name: Pasar la cobertura de Rust a «sonar»
-        if: inputs.pruebas_rust != '' && hashFiles('coverage/rust.lcov') != ''
+        if: ${{ !cancelled() && inputs.pruebas_rust != '' && hashFiles('coverage/rust.lcov') != '' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: cobertura-rust

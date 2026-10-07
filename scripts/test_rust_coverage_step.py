@@ -183,6 +183,15 @@ class SonarJobTest(unittest.TestCase):
         text = WORKFLOW.read_text()
         self.assertEqual(text.count("name: cobertura-rust"), 2)
 
+    def test_rust_steps_run_after_earlier_failures(self):
+        """Los pasos de Rust de `revisar` corren aunque haya fallado el lint o el formato."""
+        text = WORKFLOW.read_text()
+        job = text[: text.index("\n  seguridad:\n")]
+        guards = [l.strip() for l in job.splitlines() if "inputs.pruebas_rust != ''" in l and l.strip().startswith("if:")]
+        self.assertEqual(len(guards), 4, guards)
+        for guard in guards:
+            self.assertIn("!cancelled()", guard)
+
 
 if __name__ == "__main__":
     unittest.main()
