@@ -438,6 +438,55 @@ jobs:
           # shellcheck disable=SC2086
           sudo apt-get install --no-install-recommends --yes $PAQUETES_RUST
 
+      # ── El Rust que no se prueba, dicho en voz alta ──────────────────────
+      #
+      # Sin `pruebas_rust` no hay pruebas de Rust en CI ni informe de
+      # cobertura, y Sonar **no cuenta** esas líneas como código a cubrir: no
+      # salen al 0%, directamente no existen para la puerta. Medido en
+      # `vasak-flare-daemon`: 1.382 líneas de Rust y 107 «líneas a cubrir»,
+      # todas de TypeScript. Un PR que sólo toca Rust llega a la puerta con
+      # `new_lines_to_cover = 0` y la condición de cobertura no se evalúa, así
+      # que pasa siempre (vasak-flare-daemon#37, vasak-settings#160).
+      #
+      # Es un aviso y no un error porque encenderlo es una decisión de cada
+      # repositorio —qué crates, qué paquetes de sistema—; lo que no puede
+      # pasar es que esa ausencia no se vea.
+      - name: El Rust de este repositorio se mide
+        if: inputs.rust && inputs.pruebas_rust == '' && (hashFiles('Cargo.toml') != '' || hashFiles('src-tauri/Cargo.toml') != '')
+        run: |
+          echo "::warning::Este repositorio tiene Rust y no pasa «pruebas_rust»: sus pruebas de Rust no corren en CI y Sonar no ve esas líneas como código a cubrir, así que la puerta de cobertura no las mide. Para medirlas, pasá «pruebas_rust» (y «paquetes_rust» si el grafo pide bibliotecas del sistema) en el ci.yml del repositorio."
+
+      # `cargo-llvm-cov` acá, en `revisar`, y no en `sonar`: las pruebas de
+      # Rust corren **una sola vez**, instrumentadas, y de esa corrida sale el
+      # informe que `sonar` sube. Antes se compilaba el grafo dos veces —una
+      # en cada trabajo, cada una con su tanda de apt—, y en un crate de Tauri
+      # cada compilación son minutos.
+      #
+      # `continue-on-error`: si la herramienta no se puede instalar, las
+      # pruebas igual corren —sin instrumentar— en el paso de abajo. Un corte
+      # de red en la instalación no puede dejar a `revisar` en rojo ni, peor,
+      # sin correr las pruebas.
+      - uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
+        if: inputs.pruebas_rust != ''
+        continue-on-error: true
+        # Binario ya compilado, de segundos. Al commit de la release y con la
+        # versión explícita: el atajo `@cargo-llvm-cov` lo mueve la propia
+        # acción con cada versión, y clavarlo al commit dejaría el flujo
+        # apuntando a un commit que ya no está («impostor-commit» de zizmor).
+        with:
+          tool: cargo-llvm-cov@0.9.1
+
+      # La caché del directorio `target/` y del registro de cargo. Sin ella,
+      # cada corrida compila el grafo entero en frío, y el de una aplicación
+      # de Tauri son cuatrocientos crates. Se guarda sólo desde `main`: los PR
+      # la leen y no la escriben, para que las ramas no se pisen el espacio
+      # de caché del repositorio (10 GB) con compilaciones de una sola vez.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        if: inputs.pruebas_rust != ''
+        with:
+          workspaces: ${{ hashFiles('Cargo.toml') == '' && hashFiles('src-tauri/Cargo.toml') != '' && 'src-tauri' || '.' }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
       - name: Pruebas de Rust
         if: inputs.pruebas_rust != ''
         # Por variable de entorno y no con `${{ }}` dentro del script: la
@@ -447,15 +496,160 @@ jobs:
         env:
           PRUEBAS_RUST: ${{ inputs.pruebas_rust }}
         run: |
-          # Sin `--all-targets`: alcanza con las pruebas, y compilar los
-          # ejemplos y los benchmarks sería tiempo sin nada a cambio.
+          # ── Qué decide el color de este paso, y qué no ────────────────────
+          #
+          # El color lo deciden **las pruebas**, igual que cuando esto era un
+          # `cargo test` a secas. La cobertura es un subproducto: si no se
+          # puede medir —falta la herramienta, falla la instrumentación, el
+          # informe sale raro— se avisa, se borra el informe y el paso sigue
+          # con el color de las pruebas. Un problema de cobertura no puede
+          # frenar un merge, que es la razón por la que esto vivía en `sonar`.
+          #
+          # Sin `-e`: cada fallo se mira a mano, porque los de la cobertura se
+          # tragan y los de las pruebas no. Hay que apagarlo explícitamente:
+          # GitHub corre el script con `bash -e`, y un `set -uo pipefail` solo
+          # no lo saca.
+          set +e
+          set -uo pipefail
+
+          raiz=$GITHUB_WORKSPACE
+          informe="$raiz/coverage/rust.lcov"
+          # `cargo-llvm-cov` no crea el directorio del informe: sin esto falla
+          # con «failed to create file 'coverage/rust.lcov'».
+          mkdir -p "$raiz/coverage"
+          rm -f "$informe"
+
           dir=.
           [ -f src-tauri/Cargo.toml ] && [ ! -f Cargo.toml ] && dir=src-tauri
+
+          medir=true
+          if ! command -v cargo-llvm-cov >/dev/null 2>&1; then
+            echo "::warning::No está cargo-llvm-cov; las pruebas de Rust corren sin instrumentar y no hay cobertura de Rust en esta corrida."
+            medir=false
+          elif ! rustup component add llvm-tools-preview; then
+            # `llvm-cov` y `llvm-profdata` son los del toolchain, y el
+            # componente que los trae no viene en la instalación por omisión.
+            echo "::warning::No se pudo instalar llvm-tools-preview; las pruebas de Rust corren sin instrumentar y no hay cobertura de Rust en esta corrida."
+            medir=false
+          fi
+
           cd "$dir"
+          # Sin `--all-targets`: alcanza con las pruebas, y compilar los
+          # ejemplos y los benchmarks sería tiempo sin nada a cambio.
+          #
           # Sin comillas a propósito: son varios `-p crate` que tienen que
-          # llegar como argumentos separados.
-          # shellcheck disable=SC2086
-          cargo test $PRUEBAS_RUST
+          # llegar como argumentos separados. Y **no** `--workspace`: en
+          # `vasak-keyring` y `vasak-permissions` el espacio de trabajo incluye
+          # el crate de Tauri, que `pruebas_rust` deja afuera a propósito.
+          if [ "$medir" = true ]; then
+            # shellcheck disable=SC2086
+            if ! cargo llvm-cov $PRUEBAS_RUST --lcov --output-path="$informe"; then
+              # El fallo puede ser de las pruebas o de la instrumentación, y
+              # desde acá no se distinguen. Lo decide un `cargo test` común:
+              # si ése también falla, el rojo es de las pruebas; si pasa, el
+              # problema era de la cobertura y no tiene por qué voltear el
+              # paso. Es una segunda compilación, pero sólo cuando algo ya
+              # salió mal.
+              rm -f "$informe"
+              echo "::warning::Falló la corrida instrumentada; se repiten las pruebas sin instrumentar para saber si el rojo es de ellas."
+              # shellcheck disable=SC2086
+              cargo test $PRUEBAS_RUST || exit 1
+              echo "::warning::Las pruebas pasan sin instrumentar: lo que falló fue la cobertura. Esta corrida sale sin cobertura de Rust."
+            fi
+          else
+            # shellcheck disable=SC2086
+            cargo test $PRUEBAS_RUST || exit 1
+          fi
+
+          # Desde acá las pruebas ya pasaron, y nada de lo que sigue puede
+          # cambiar eso: cada problema del informe avisa, lo borra y sale en 0.
+          [ -f "$informe" ] || exit 0
+
+          # ── El informe es una medición, o no es nada ──────────────────────
+          #
+          # El invariante es uno solo, en dos mitades: **ninguna ruta del
+          # repositorio puede quedar absoluta**. Antes del `sed` se comprueba
+          # que haya por lo menos una, porque si no hay ninguna el prefijo no
+          # es el que creíamos y el `sed` no tocaría nada: dejaría un informe
+          # de apariencia normal con rutas que Sonar no resuelve a ningún
+          # archivo, sobre el que no dice nada.
+          medidos=$(grep -cF "SF:${raiz}/" "$informe" 2>/dev/null || true)
+          medidos=${medidos:-0}
+          if [ "$medidos" -eq 0 ]; then
+            echo "::warning::El informe de cobertura de Rust no nombra ningún archivo bajo «${raiz}»: no se midió nada. Eso no es una cobertura de 0%, es la ausencia de cobertura, y el archivo se borra para que no quede con forma de informe."
+            rm -f "$informe"
+            exit 0
+          fi
+
+          # Las rutas salen absolutas —las de la máquina que compiló— y Sonar
+          # las quiere relativas a la raíz del repositorio. `cargo-llvm-cov` no
+          # tiene opción para esto: se verificó en 0.9.1.
+          sed -i "s|^SF:${raiz}/|SF:|" "$informe"
+
+          # Y después se comprueba que no quede ninguna del repositorio, en
+          # vez de asumir que el `sed` acertó. Sólo las de la raíz: las fuentes
+          # de la biblioteca estándar —que entran en cuanto algún crate usa
+          # `thread_local!`— no son del proyecto, Sonar las ignora, y contarlas
+          # como error le sacó el informe entero a `vasak-keyring` una vez.
+          sin_convertir=$(grep -cF "SF:${raiz}/" "$informe" 2>/dev/null || true)
+          sin_convertir=${sin_convertir:-0}
+          if [ "$sin_convertir" -ne 0 ]; then
+            echo "::warning::No se sube el informe de Rust: quedaron ${sin_convertir} rutas del repositorio sin convertir a relativas y el prefijo que se quitó era «${raiz}». Sin esto Sonar no resolvería los archivos y la cobertura no entraría sin avisar."
+            rm -f "$informe"
+            exit 0
+          fi
+
+          # Un miembro del espacio de trabajo que `pruebas_rust` no nombra no
+          # entra en el informe: `cargo-llvm-cov` lo arma con los crates que se
+          # probaron, no con los que compilaron. Se nombran, para que el 0% de
+          # sus archivos se lea como lo que es.
+          sin_medir=$(cargo metadata --no-deps --format-version 1 2>/dev/null \
+            | python3 -c '
+          import json, os, sys
+          raiz, informe = sys.argv[1], sys.argv[2]
+          medidos = {l[3:].strip() for l in open(informe, encoding="utf-8", errors="replace") if l.startswith("SF:")}
+          miembros = []
+          for p in json.load(sys.stdin)["packages"]:
+              d = os.path.relpath(os.path.dirname(p["manifest_path"]), raiz)
+              miembros.append((p["name"], "" if d == "." else d + "/"))
+          print(" ".join(n for n, prefijo in miembros if not any(f.startswith(prefijo) for f in medidos)))
+          ' "$raiz" "$informe" 2>/dev/null || true)
+          if [ -n "$sin_medir" ]; then
+            echo "::warning::Miembros del espacio de trabajo que no aparecen en el informe porque «pruebas_rust» no los nombra: ${sin_medir}. Sus archivos van a figurar como cubiertos cero en Sonar, y no es que estén sin probar."
+          fi
+
+          # Los números y no sólo el «se generó»: un paso que dice que midió
+          # sin decir qué midió es el mismo problema del informe vacío.
+          python3 - "$informe" <<'RESUMEN' || echo "::warning::No se pudo resumir el informe; se sube igual."
+          import sys
+          archivos = lineas = cubiertas = 0
+          for linea in open(sys.argv[1], encoding="utf-8", errors="replace"):
+              if linea.startswith("SF:"):
+                  archivos += 1
+              elif linea.startswith("DA:"):
+                  campos = linea[3:].strip().split(",")
+                  if len(campos) < 2 or not campos[1].lstrip("-").isdigit():
+                      continue
+                  lineas += 1
+                  if int(campos[1]) > 0:
+                      cubiertas += 1
+          porcentaje = 100 * cubiertas / lineas if lineas else 0
+          print(f"Cobertura de Rust: {archivos} archivos, {cubiertas}/{lineas} líneas ({porcentaje:.1f}%)")
+          RESUMEN
+          exit 0
+
+      # El informe pasa a `sonar` como artefacto. Sólo si existe: el paso de
+      # arriba lo borra cuando no es una medición, y entonces no hay nada que
+      # pasar —ni la propiedad, que `sonar` pone sólo si lo recibe—. Un día
+      # de retención alcanza: lo lee el trabajo de al lado, minutos después.
+      - name: Pasar la cobertura de Rust a «sonar»
+        if: inputs.pruebas_rust != '' && hashFiles('coverage/rust.lcov') != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cobertura-rust
+          path: coverage/rust.lcov
+          retention-days: 1
+          if-no-files-found: ignore
 
   # ── Seguridad: las dependencias y los propios workflows ──────────────────
   #
@@ -596,6 +790,12 @@ jobs:
   # fork no recibe secretos, y un repositorio que todavía no pasa el token
   # tampoco.
   sonar:
+    # Espera a `revisar` porque de ahí sale la cobertura de Rust, y corre
+    # aunque `revisar` falle: con pruebas en rojo el análisis igual sirve, y
+    # una puerta que sólo mira los PR verdes no ve nada. Lo único que lo
+    # saltea es que se cancele la corrida.
+    needs: revisar
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -658,245 +858,36 @@ jobs:
 
       # ── La cobertura de Rust ─────────────────────────────────────────────
       #
-      # En este trabajo y no en `revisar` por lo mismo que la de arriba: las
-      # reglas de `main` exigen `revisar` y nada más, así que un problema de
-      # cobertura no puede frenar un merge. Cuesta correr las pruebas dos
-      # veces, en paralelo.
+      # La mide `revisar`, en la misma corrida que decide si las pruebas
+      # pasan, y llega acá como artefacto. Antes este trabajo compilaba el
+      # grafo otra vez —con su tanda de apt— sólo para medir: dos
+      # compilaciones de lo mismo, en paralelo, en cada PR.
       #
-      # El Rust es la mayor parte de lo que escribe la organización —los
-      # daemons, `vasak-permissions`, `vasak-keyring`, los plugins de Tauri— y
-      # hasta ahora no se medía nada: el análisis subía cobertura de
-      # JavaScript para una organización que escribe sobre todo en Rust. Y no
-      # es que faltaran pruebas: en `vasak-accounts` hay 962 y cubren el 88% de
-      # las líneas. Faltaba el número.
-      - uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
-        # `continue-on-error` por la misma razón que el paso de abajo no lleva
-        # `set -e`, y es el otro lado de la misma moneda: el *script* de
-        # cobertura se traga sus fallos a propósito, pero si el paso que instala
-        # la herramienta falla, el trabajo muere antes de llegar al escaneo.
-        # Un corte de red, una release movida o un paquete renombrado
-        # dejarían al repositorio entero sin análisis —la misma ceguera que
-        # este paso vino a tapar, entrando por la puerta de atrás.
-        continue-on-error: true
-        # Binario ya compilado, de segundos; `cargo install cargo-llvm-cov`
-        # serían minutos, en un trabajo que corre en treinta y pico
-        # repositorios.
-        #
-        # Al commit de la release y no al atajo `@cargo-llvm-cov`: ese atajo lo
-        # mueve la propia acción con cada versión, y clavarlo al commit deja
-        # el flujo apuntando a un commit que ya no está —que es el
-        # «impostor-commit» de zizmor—. La versión de la herramienta va
-        # explícita por lo mismo, y de paso esquiva el enfriamiento de
-        # dependencias que la acción aplica por omisión.
+      # `continue-on-error`: si el artefacto no está —las pruebas fallaron
+      # antes de medir, la cobertura no se pudo sacar, o el repositorio no
+      # pasa `pruebas_rust`— el análisis sigue igual, sin la propiedad.
+      - name: Traer la cobertura de Rust de «revisar»
         if: steps.token.outputs.hay == 'true' && inputs.pruebas_rust != ''
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          tool: cargo-llvm-cov@0.9.1
+          name: cobertura-rust
+          path: coverage
 
       - name: Cobertura de Rust
         id: cobertura_rust
-        # La misma condición que el paso «Pruebas de Rust» de `revisar`: lo
-        # que no se prueba, tampoco se mide. De los treinta y pico
-        # repositorios que llaman a este flujo, cuatro pasan `pruebas_rust`.
         if: steps.token.outputs.hay == 'true' && inputs.pruebas_rust != ''
-        # Por variable de entorno y no con `${{ }}` dentro del script, por lo
-        # mismo que el paso «Pruebas de Rust»: la plantilla se pega como texto
-        # en el bash antes de correr, así que un valor con `;` o `$( )` se
-        # ejecutaría.
-        env:
-          DEBIAN_FRONTEND: noninteractive
-          PAQUETES_RUST: ${{ inputs.paquetes_rust }}
-          PRUEBAS_RUST: ${{ inputs.pruebas_rust }}
         run: |
-          # ── Por qué este paso no puede cortar la corrida ──────────────────
-          #
-          # Por lo mismo que el paso de cobertura de `vasak-wireplumber-modules`
-          # y al revés que el paso de formato de más arriba. Aquél protege una
-          # comprobación: si se traga un fallo, algo roto pasa por verificado,
-          # y eso es un falso verde. Acá, en cambio, un fallo duro en la
-          # cobertura significa que **no hay análisis**, y la ausencia de
-          # análisis es justo la ceguera que este paso vino a tapar: es lo que
-          # dejó el Rust de la organización sin medir durante meses, sin que
-          # nadie lo notara. Un paso de cobertura que puede tumbar el análisis
-          # se sabotea a sí mismo.
-          #
-          # Lo que sí hace es no mentir. Si la herramienta no está, si los
-          # paquetes que pide el grafo no se pudieron instalar, si la
-          # compilación falla o si las pruebas quedan en rojo, avisa con un
-          # `::warning::`, **borra** el informe y sigue. Borra, y no deja uno
-          # vacío: un archivo que existe y no mide nada es peor que un archivo
-          # que no está, porque se lee como una medición. Por eso este paso no
-          # escribe su salida en ese caso, y el análisis de abajo entonces no
-          # le pasa la propiedad — sin informe no hay nada que medir, y Sonar
-          # tiene que seguir viendo 0% de cobertura en el código nuevo, que es
-          # la cifra honesta.
-          #
-          # Y al revés que un informe vacío: si las pruebas quedan en rojo la
-          # cobertura se sube igual, porque el rojo lo marca `revisar`, que es
-          # donde corresponde.
-          set -uo pipefail
-
-          raiz=$GITHUB_WORKSPACE
-          informe="$raiz/coverage/rust.lcov"
-
-          # `cargo-llvm-cov` no crea el directorio del informe. Sin esto falla
-          # con «failed to create file 'coverage/rust.lcov': No such file or
-          # directory», que es un mensaje sobre un archivo que este paso es el
-          # primero que nombra.
-          mkdir -p "$raiz/coverage"
-
-          # Las dependencias de sistema que declara `paquetes_rust`, antes de
-          # intentar compilar nada: sin ellas un crate de Tauri muere en el
-          # `build.rs` de un `-sys` con un `process::exit(1)` y un error que no
-          # llega a decir «falta el paquete».
-          #
-          # **Avisa y sale, al revés que el paso hermano de `revisar`,** y por
-          # lo mismo que el `bun install` del paso de cobertura de más arriba:
-          # si el `apt` falla, este paso no puede producir un informe, y un paso
-          # de cobertura que no puede producir un informe no puede tumbar el
-          # escaneo. Sale con 0 **sin escribir la salida**, que es lo que
-          # sostiene el invariante que explica el comentario de más arriba: sin
-          # informe y sin propiedad, Sonar ve 0% de cobertura en el código nuevo
-          # y el análisis sigue igual.
-          #
-          # Y vacío no hace absolutamente nada —ni un `apt-get update`—, que es
-          # lo que deja gratis este paso para los que miden crates que compilan
-          # en un runner pelado.
-          if [ -n "$PAQUETES_RUST" ]; then
-            if ! sudo apt-get update; then
-              echo "::warning::Falló «apt-get update»; la cobertura de Rust no se mide en esta corrida. El análisis sigue igual, con 0% de cobertura en el código nuevo, que es la cifra honesta."
-              exit 0
-            fi
-            # Sin comillas a propósito, como el `cargo test` de más abajo y
-            # como el `apt-get install` del paso hermano de `revisar`: son
-            # varios paquetes y tienen que llegar como argumentos separados.
-            # shellcheck disable=SC2086
-            if ! sudo apt-get install --no-install-recommends --yes $PAQUETES_RUST; then
-              echo "::warning::No se pudieron instalar los paquetes que declara «paquetes_rust»; la cobertura de Rust sale sin medir. Si el fallo era de eso, el paso «Pruebas de Rust» de «revisar», que instala la misma lista y sí corta, lo dice con más contexto."
-              exit 0
-            fi
+          # La propiedad apunta a un archivo, y un archivo que no está es una
+          # ruta colgada en el análisis: se pasa sólo si el informe llegó. Sin
+          # informe Sonar no ve las líneas de Rust como código a cubrir, y el
+          # aviso lo dejó `revisar`.
+          if [ -s coverage/rust.lcov ]; then
+            echo "Cobertura de Rust recibida: $(grep -c '^SF:' coverage/rust.lcov) archivos."
+            echo "propiedad=-Dsonar.rust.lcov.reportPaths=coverage/rust.lcov" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::No llegó cobertura de Rust desde «revisar»; el análisis sigue sin ella. El motivo está en el paso «Pruebas de Rust» de «revisar»."
           fi
-
-          # La misma búsqueda de crate que el paso «Pruebas de Rust» de
-          # `revisar`, copiada y no reescrita. Dos maneras de encontrar el
-          # directorio del crate se desincronizan solas, y en un flujo que
-          # corre en treinta y pico repositorios esa diferencia no la nota
-          # nadie hasta que un informe apunta al lugar equivocado.
-          dir=.
-          [ -f src-tauri/Cargo.toml ] && [ ! -f Cargo.toml ] && dir=src-tauri
-
-          # `llvm-cov` y `llvm-profdata` son los del toolchain, y el componente
-          # que los trae no viene en la instalación por omisión. El runner sí
-          # trae rustup —está en la imagen de Ubuntu, junto con el cargo—, así
-          # que lo que hay que agregar es el componente, no un compilador.
-          if ! command -v rustup >/dev/null 2>&1; then
-            echo "::warning::Este runner no trae rustup; no hay llvm-cov del toolchain y la cobertura de Rust no se mide."
-          elif ! rustup component add llvm-tools-preview; then
-            echo "::warning::No se pudo instalar llvm-tools-preview; la cobertura de Rust puede quedar sin medir."
-          fi
-
-          cd "$dir"
-          # Sin comillas a propósito, como en el paso de pruebas: son varios
-          # `-p crate` que tienen que llegar como argumentos separados.
-          #
-          # Se le pasa lo mismo que se le pasa a `cargo test`, y **no**
-          # `--workspace`: en `vasak-keyring` y en `vasak-permissions` el
-          # espacio de trabajo incluye el crate de Tauri, que es justamente lo
-          # que `pruebas_rust` deja afuera para no pagar medio escritorio de
-          # apt en cada corrida. Medir el workspace entero intentaría
-          # compilarlo, y en un runner pelado no compila.
-          # shellcheck disable=SC2086
-          cargo llvm-cov $PRUEBAS_RUST --lcov --output-path="$informe" \
-            || echo "::warning::Falló la corrida instrumentada; la cobertura de Rust sale sin medir."
-
-          # ── El informe es una medición, o no es nada ──────────────────────
-          #
-          # El invariante es uno solo, en dos mitadades: **ninguna ruta del
-          # repositorio puede quedar absoluta**. Antes del `sed` se comprueba
-          # que haya por lo menos una, porque si no hay ninguna el prefijo no
-          # es el que creíamos y el `sed` no tocaría nada: dejaría un informe
-          # de apariencia normal con rutas que Sonar no resuelve a ningún
-          # archivo, sobre el que no dice nada. Verde por la razón
-          # equivocada, que es la forma de fallar que este trabajo vino a
-          # evitar.
-          medidos=$(grep -cF "SF:${raiz}/" "$informe" 2>/dev/null || true)
-          medidos=${medidos:-0}
-          if [ "$medidos" -eq 0 ]; then
-            echo "::warning::El informe de cobertura de Rust no nombra ningún archivo bajo «${raiz}»: no se midió nada. Eso no es una cobertura de 0%, es la ausencia de cobertura, y el archivo se borra para que no quede con forma de informe. El análisis sigue igual, sin cobertura de Rust; el rojo, si lo hay, lo marca «revisar»."
-            rm -f "$informe"
-            exit 0
-          fi
-
-          # Las rutas del informe salen absolutas —las de la máquina que
-          # compiló— y Sonar las quiere relativas a la raíz del repositorio.
-          # `cargo-llvm-cov` no tiene opción para esto: se verificó en 0.9.1.
-          sed -i "s|^SF:${raiz}/|SF:|" "$informe"
-
-          # Y después se comprueba que no quede ninguna del repositorio, en
-          # vez de asumir que el `sed` acertó.
-          #
-          # Sólo las de la raíz, y a propósito: el informe también trae
-          # fuentes que **no** son del repositorio —las de la biblioteca
-          # estándar, que vienen con el toolchain y entran en cuanto algún
-          # crate usa `thread_local!`—, y ésas no son cosa de este paso ni se
-          # convierten. Medirlas no corresponde y dejarlas tampoco molesta:
-          # están fuera del proyecto, así que Sonar las ignora. Contarlas como
-          # error sí molesta: fue lo que hizo la primera versión de este paso,
-          # que le sacó el informe entero del medio a `vasak-keyring` —que sí
-          # se estaba midiendo— por una línea de la biblioteca estándar.
-          sin_convertir=$(grep -cF "SF:${raiz}/" "$informe" 2>/dev/null || true)
-          sin_convertir=${sin_convertir:-0}
-          if [ "$sin_convertir" -ne 0 ]; then
-            echo "::error::No se sube el informe de Rust: quedaron ${sin_convertir} rutas del repositorio sin convertir a relativas y el prefijo que se quitó era «${raiz}». Sin esto Sonar no resolvería los archivos y la cobertura no entraría sin avisar."
-            rm -f "$informe"
-            exit 0
-          fi
-
-          # Un miembro del espacio de trabajo que `pruebas_rust` no nombra no
-          # entra en el informe: `cargo-llvm-cov` arma el informe con los
-          # crates que se probaron, no con los que compilaron. Sus archivos no
-          # es que estén sin cubrir —es que no se miraron— y Sonar los cuenta
-          # como cubiertos cero, que son dos cosas distintas. Se nombran, para
-          # que ese 0% se lea como lo que es y quede escrito qué se agrega en
-          # el repositorio de al lado para medirlos.
-          sin_medir=$(cargo metadata --no-deps --format-version 1 2>/dev/null \
-            | python3 -c '
-          import json, os, sys
-          raiz, informe = sys.argv[1], sys.argv[2]
-          medidos = {l[3:].strip() for l in open(informe, encoding="utf-8", errors="replace") if l.startswith("SF:")}
-          miembros = []
-          for p in json.load(sys.stdin)["packages"]:
-              d = os.path.relpath(os.path.dirname(p["manifest_path"]), raiz)
-              miembros.append((p["name"], "" if d == "." else d + "/"))
-          print(" ".join(n for n, prefijo in miembros if not any(f.startswith(prefijo) for f in medidos)))
-          ' "$raiz" "$informe" 2>/dev/null || true)
-          if [ -n "$sin_medir" ]; then
-            echo "::warning::Miembros del espacio de trabajo que no aparecen en el informe porque «pruebas_rust» no los nombra: ${sin_medir}. Sus archivos van a figurar como cubiertos cero en Sonar, y no es que estén sin probar. Para medirlos, agregalos a «pruebas_rust» en el repositorio de al lado."
-          fi
-
-          # Se imprimen los números y no sólo el «se generó»: un paso que dice
-          # que midió sin decir qué midió es el mismo problema del informe
-          # vacío, un renglón más arriba.
-          python3 - "$informe" <<'RESUMEN' || echo "::warning::No se pudo resumir el informe; se sube igual."
-          import sys
-          archivos = lineas = cubiertas = 0
-          for linea in open(sys.argv[1], encoding="utf-8", errors="replace"):
-              if linea.startswith("SF:"):
-                  archivos += 1
-              elif linea.startswith("DA:"):
-                  campos = linea[3:].strip().split(",")
-                  if len(campos) < 2 or not campos[1].lstrip("-").isdigit():
-                      continue
-                  lineas += 1
-                  if int(campos[1]) > 0:
-                      cubiertas += 1
-          porcentaje = 100 * cubiertas / lineas if lineas else 0
-          print(f"  {archivos} archivos, {cubiertas}/{lineas} líneas ({porcentaje:.1f}%)")
-          RESUMEN
-
-          # Recién acá, con el informe ya verificado, se anuncia que hay algo
-          # que medir. Si este paso no llegara a esta línea, la salida queda
-          # vacía y el análisis de abajo no le pasa la propiedad.
-          echo "propiedad=-Dsonar.rust.lcov.reportPaths=coverage/rust.lcov" >> "$GITHUB_OUTPUT"
 
       - name: Análisis
         if: steps.token.outputs.hay == 'true'
