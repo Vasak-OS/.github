@@ -432,6 +432,13 @@ jobs:
         # corregir. El paso sigue en rojo igual; lo que cambia es que se sabe
         # también cómo están las pruebas.
         if: ${{ !cancelled() && inputs.paquetes_rust != '' }}
+        # Un techo, además del tiempo por conexión de abajo. El 07/10/2026 un
+        # `apt-get update` quedó colgado 28 minutos sin escribir una línea, en
+        # dos repositorios a la vez, y el trabajo se habría quedado así hasta
+        # las seis horas que da GitHub. Una tanda normal tarda entre 20 y 40 s;
+        # diez minutos es holgura de sobra para un espejo lento, y un rojo a
+        # los diez minutos se relanza, uno a las seis horas no lo ve nadie.
+        timeout-minutes: 10
         # Por variable de entorno y no con `${{ }}` dentro del script, por lo
         # mismo que el paso de abajo: la plantilla se pega como texto en el
         # bash antes de correr, así que un valor con `;` o `$( )` se ejecutaría.

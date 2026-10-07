@@ -183,6 +183,13 @@ class SonarJobTest(unittest.TestCase):
         text = WORKFLOW.read_text()
         self.assertEqual(text.count("name: cobertura-rust"), 2)
 
+    def test_apt_step_has_ceiling(self):
+        """La tanda de apt tiene techo: un espejo colgado no puede comerse las seis horas del trabajo."""
+        text = WORKFLOW.read_text()
+        step = text[text.index("      - name: Las dependencias de sistema de Rust"):]
+        step = step[: step.index("        run: |")]
+        self.assertIn("timeout-minutes: 10", step)
+
     def test_rust_steps_run_after_earlier_failures(self):
         """Los pasos de Rust de `revisar` corren aunque haya fallado el lint o el formato."""
         text = WORKFLOW.read_text()
