@@ -939,6 +939,16 @@ jobs:
           # toca la interfaz. Es una decisión, no un truco, y se saca el día
           # que alguna aplicación monte componentes en las pruebas.
           #
+          # Y los `commands.rs` también, por lo mismo del otro lado. Son la capa
+          # de comandos de Tauri: envoltorios finos sobre D-Bus/IPC que delegan
+          # en los módulos que sí se prueban (el parseo, la lógica). Sus propias
+          # líneas —abrir la conexión, llamar al método, mapear el error— no las
+          # mueve ninguna prueba unitaria sin un servicio vivo detrás (un BlueZ,
+          # un NetworkManager), que en CI no hay. Medir esa capa sólo frena el PR
+          # que toca un comando, sin decir nada útil; su comportamiento se
+          # verifica contra el servicio real. Misma decisión que los `.vue`, y se
+          # saca el día que la capa de comandos se pruebe contra un bus de mentira.
+          #
           # La propiedad es por lenguaje: `sonar.rust.lcov.reportPaths` para
           # Rust, y un lcov de Rust puesto en el sensor de JavaScript no se
           # importa. Los otros dos nombres que quedan a mano no existen:
@@ -982,6 +992,6 @@ jobs:
             -Dsonar.exclusions=**/node_modules/**,**/target/**,**/dist/**,**/coverage/**,src-tauri/gen/**,**/tests/**,**/*.test.*,**/*.spec.*
             -Dsonar.test.inclusions=**/tests/**,**/test/**,**/pruebas/**,**/*.test.*,**/*.spec.*,**/tests.rs,**/*_test.rs
             -Dsonar.test.exclusions=**/node_modules/**,**/target/**,**/dist/**
-            -Dsonar.coverage.exclusions=**/*.vue
+            -Dsonar.coverage.exclusions=**/*.vue,**/commands.rs
             -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
             ${{ steps.cobertura_rust.outputs.propiedad }}
