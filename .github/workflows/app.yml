@@ -949,6 +949,15 @@ jobs:
           # verifica contra el servicio real. Misma decisión que los `.vue`, y se
           # saca el día que la capa de comandos se pruebe contra un bus de mentira.
           #
+          # Esa capa se escribe de dos formas: un único `commands.rs`, o un
+          # módulo `commands/` con un archivo por dominio (`audio.rs`,
+          # `battery.rs`, `mod.rs`, …). `**/commands.rs` sólo atrapa la primera,
+          # así que los cuatro repos que usan carpeta —`vasak-desktop`,
+          # `vasak-settings`, `vasak-resonance`, `vasak-session-manager`— tenían
+          # su envoltorio contando contra la cobertura y hundían el gate
+          # (`commands/audio.rs` al 0%). Por eso también `**/commands/*.rs`,
+          # acotado a los `.rs` directos de la carpeta: el mismo glue, nada más.
+          #
           # La propiedad es por lenguaje: `sonar.rust.lcov.reportPaths` para
           # Rust, y un lcov de Rust puesto en el sensor de JavaScript no se
           # importa. Los otros dos nombres que quedan a mano no existen:
@@ -992,6 +1001,6 @@ jobs:
             -Dsonar.exclusions=**/node_modules/**,**/target/**,**/dist/**,**/coverage/**,src-tauri/gen/**,**/tests/**,**/*.test.*,**/*.spec.*
             -Dsonar.test.inclusions=**/tests/**,**/test/**,**/pruebas/**,**/*.test.*,**/*.spec.*,**/tests.rs,**/*_test.rs
             -Dsonar.test.exclusions=**/node_modules/**,**/target/**,**/dist/**
-            -Dsonar.coverage.exclusions=**/*.vue,**/commands.rs
+            -Dsonar.coverage.exclusions=**/*.vue,**/commands.rs,**/commands/*.rs
             -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
             ${{ steps.cobertura_rust.outputs.propiedad }}
