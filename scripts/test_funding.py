@@ -64,10 +64,14 @@ class FundingTest(unittest.TestCase):
         _, custom = read_funding()
         self.assertIn("https://os.vasak.net.ar/donate/", custom)
 
-    def test_ko_fi_is_a_username_not_a_url(self):
-        """Ko-fi va como usuario: GitHub arma la URL y una entera rompe el botón."""
+    def test_github_sponsors_is_a_handle_and_goes_first(self):
+        """GitHub Sponsors es el medio oficial: va como handle —GitHub arma la
+        URL, una entera rompe el botón— y primero, que es donde GitHub lo
+        muestra más arriba y a donde queremos que entre todo lo que se pueda."""
         keys, _ = read_funding()
-        self.assertRegex(keys["ko_fi"], r"^[A-Za-z0-9_]+$")
+        self.assertIn("github", keys)
+        self.assertRegex(keys["github"], r"^[A-Za-z0-9-]+$")
+        self.assertEqual(next(iter(keys)), "github")
 
 
 if __name__ == "__main__":
