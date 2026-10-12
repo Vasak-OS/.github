@@ -811,6 +811,22 @@ jobs:
   # Sin `SONAR_TOKEN` se saltea y lo dice, en vez de fallar: un PR desde un
   # fork no recibe secretos, y un repositorio que todavía no pasa el token
   # tampoco.
+  #
+  # **La puerta bloquea** (Vasak-OS/.github#16). El check que decide no es este
+  # trabajo —`app / sonar` queda verde aunque la puerta falle— sino `SonarCloud
+  # Code Analysis`, el que publica la aplicación de SonarQube Cloud con la
+  # puerta del proyecto: 80 % de cobertura del código nuevo, el umbral por
+  # omisión. Es check requerido del ruleset de `main`, al lado de
+  # `app / revisar`, en las aplicaciones, los complementos de Tauri, los
+  # demonios, `vue-libvasak` y los dos repositorios de C/C++. No lo es donde no
+  # hay cobertura que medir (`website`, `archiso`, `PKGBUILDS`,
+  # `vasak-desktop-settings`, este repositorio, `agents`, el tema de iconos y
+  # los de configuración o empaquetado), ni en `tauri-plugin-vsk-contextual-menu`,
+  # que va directo a `main`: un check requerido frenaría esos pushes.
+  #
+  # Una consecuencia de lo de arriba: un PR desde un fork no corre el análisis,
+  # así que tampoco recibe `SonarCloud Code Analysis` y queda esperando un check
+  # que no llega. Se mergea desde una rama del repositorio.
   sonar:
     # Espera a `revisar` porque de ahí sale la cobertura de Rust, y corre
     # aunque `revisar` falle: con pruebas en rojo el análisis igual sirve, y
