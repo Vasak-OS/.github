@@ -280,18 +280,24 @@ jobs:
       - name: El toolchain de Rust
         if: inputs.rust && (hashFiles('Cargo.toml') != '' || hashFiles('src-tauri/Cargo.toml') != '')
         run: |
+          set -euo pipefail
           rustup toolchain install stable --profile minimal --component rustfmt
           rustup default stable
           rustc --version
           cargo --version
 
-          dir=.
-          [ -f Cargo.toml ] || dir=src-tauri
           instalada=$(rustc --version | cut -d' ' -f2)
-          # El mayor `rust-version` de los paquetes del repositorio; vacío si
-          # ninguno lo declara.
-          pedida=$(cd "$dir" && cargo metadata --no-deps --format-version 1 \
-            | jq -r '.packages[].rust_version // empty' | sort -V | tail -1)
+          # El mayor `rust-version` entre los paquetes de todos los manifiestos
+          # (raíz y `src-tauri`, que pueden convivir); vacío si ninguno lo
+          # declara.
+          versiones=""
+          for manifiesto in Cargo.toml src-tauri/Cargo.toml; do
+            if [ -f "$manifiesto" ]; then
+              versiones+=$(cargo metadata --manifest-path "$manifiesto" --no-deps --format-version 1 \
+                | jq -r '.packages[].rust_version // empty')$'\n'
+            fi
+          done
+          pedida=$(printf '%s' "$versiones" | sed '/^$/d' | sort -V | tail -1)
           if [ -n "$pedida" ] && [ "$(printf '%s\n%s\n' "$pedida" "$instalada" | sort -V | tail -1)" != "$instalada" ]; then
             echo "::error::El repositorio pide rust-version $pedida y el stable instalado es $instalada. Bajá el rust-version o esperá a que stable lo alcance."
             exit 1
