@@ -269,6 +269,34 @@ jobs:
           fi
 
       # ── El backend ───────────────────────────────────────────────────────
+      # ── El toolchain de Rust ─────────────────────────────────────────────
+      #
+      # Antes se usaba el Rust que trae la imagen de `ubuntu-latest`, que
+      # cambia sin aviso con cada imagen y no tiene por qué cumplir el
+      # `rust-version` de las dependencias (Grafeo pide 1.99). Se instala
+      # `stable` de forma explícita: siempre el último, y el log dice cuál.
+      # Si el repositorio declara un `rust-version` mayor que el instalado,
+      # corta acá con un mensaje claro y no a mitad de la compilación.
+      - name: El toolchain de Rust
+        if: inputs.rust && (hashFiles('Cargo.toml') != '' || hashFiles('src-tauri/Cargo.toml') != '')
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt
+          rustup default stable
+          rustc --version
+          cargo --version
+
+          dir=.
+          [ -f Cargo.toml ] || dir=src-tauri
+          instalada=$(rustc --version | cut -d' ' -f2)
+          # El mayor `rust-version` de los paquetes del repositorio; vacío si
+          # ninguno lo declara.
+          pedida=$(cd "$dir" && cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[].rust_version // empty' | sort -V | tail -1)
+          if [ -n "$pedida" ] && [ "$(printf '%s\n%s\n' "$pedida" "$instalada" | sort -V | tail -1)" != "$instalada" ]; then
+            echo "::error::El repositorio pide rust-version $pedida y el stable instalado es $instalada. Bajá el rust-version o esperá a que stable lo alcance."
+            exit 1
+          fi
+
       # ── El formato, sólo en lo que el PR toca ────────────────────────────
       #
       # Mira los archivos que el PR agrega o cambia y ningún otro. Esto no es
