@@ -1008,6 +1008,18 @@ jobs:
           # (`commands/audio.rs` al 0%). Por eso también `**/commands/*.rs`,
           # acotado a los `.rs` directos de la carpeta: el mismo glue, nada más.
           #
+          # Y el módulo de PAM, por lo mismo. `pam_vasak_keyring` (el único del
+          # taller) es un `cdylib` de puro glue de FFI: los puntos de entrada
+          # `pam_sm_*` que PAM llama como root dentro del gestor de inicio de
+          # sesión, y la entrega al demonio por un socket unix. Sus líneas —leer
+          # el item de PAM, derivar, conectar al socket, contestar— no las mueve
+          # ninguna prueba sin una pila de PAM viva, ser root y un
+          # `/run/user/<uid>` real, que en CI no hay. La lógica que sí se puede
+          # probar (el parseo del marco, la derivación, el gate de fase) está
+          # extraída y tiene pruebas. `**/pam_*/src/lib.rs` atrapa el `lib.rs` de
+          # cualquier crate `pam_*`, que es donde vive esa capa. Misma decisión
+          # que los `commands.rs`.
+          #
           # La propiedad es por lenguaje: `sonar.rust.lcov.reportPaths` para
           # Rust, y un lcov de Rust puesto en el sensor de JavaScript no se
           # importa. Los otros dos nombres que quedan a mano no existen:
@@ -1051,6 +1063,6 @@ jobs:
             -Dsonar.exclusions=**/node_modules/**,**/target/**,**/dist/**,**/coverage/**,src-tauri/gen/**,**/tests/**,**/*.test.*,**/*.spec.*
             -Dsonar.test.inclusions=**/tests/**,**/test/**,**/pruebas/**,**/*.test.*,**/*.spec.*,**/tests.rs,**/*_test.rs
             -Dsonar.test.exclusions=**/node_modules/**,**/target/**,**/dist/**
-            -Dsonar.coverage.exclusions=**/*.vue,**/commands.rs,**/commands/*.rs
+            -Dsonar.coverage.exclusions=**/*.vue,**/commands.rs,**/commands/*.rs,**/pam_*/src/lib.rs
             -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
             ${{ steps.cobertura_rust.outputs.propiedad }}
