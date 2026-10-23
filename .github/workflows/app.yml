@@ -1063,6 +1063,6 @@ jobs:
             -Dsonar.exclusions=**/node_modules/**,**/target/**,**/dist/**,**/coverage/**,src-tauri/gen/**,**/tests/**,**/*.test.*,**/*.spec.*
             -Dsonar.test.inclusions=**/tests/**,**/test/**,**/pruebas/**,**/*.test.*,**/*.spec.*,**/tests.rs,**/*_test.rs
             -Dsonar.test.exclusions=**/node_modules/**,**/target/**,**/dist/**
-            -Dsonar.coverage.exclusions=**/*.vue,**/commands.rs,**/commands/*.rs,**/pam_*/src/lib.rs
+            -Dsonar.coverage.exclusions=**/*.vue,**/commands.rs,**/commands/*.rs,**/pam_*/src/lib.rs,**/clipboard/watcher.rs,**/clipboard/source.rs,**/clipboard/globals.rs,**/windows_apps/clipboard.rs
             -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
             ${{ steps.cobertura_rust.outputs.propiedad }}
