@@ -466,12 +466,12 @@ jobs:
         # corregir. El paso sigue en rojo igual; lo que cambia es que se sabe
         # también cómo están las pruebas.
         if: ${{ !cancelled() && inputs.paquetes_rust != '' }}
-        # Un techo, además del tiempo por conexión de abajo. El 07/10/2026 un
-        # `apt-get update` quedó colgado 28 minutos sin escribir una línea, en
-        # dos repositorios a la vez, y el trabajo se habría quedado así hasta
-        # las seis horas que da GitHub. Una tanda normal tarda entre 20 y 40 s;
-        # diez minutos es holgura de sobra para un espejo lento, y un rojo a
-        # los diez minutos se relanza, uno a las seis horas no lo ve nadie.
+        # Un techo del paso entero, detrás del `timeout` por intento de abajo. El
+        # 07/10/2026 un `apt-get update` quedó colgado 28 minutos sin escribir una
+        # línea, en dos repositorios a la vez, y el trabajo se habría quedado así
+        # hasta las seis horas que da GitHub. Ahora cada `update` se acota y se
+        # reintenta (abajo), que resuelve el caso común; estos diez minutos quedan
+        # de red por si hasta los reintentos se cuelgan, para cortar y no esperar.
         timeout-minutes: 10
         # Por variable de entorno y no con `${{ }}` dentro del script, por lo
         # mismo que el paso de abajo: la plantilla se pega como texto en el
@@ -487,12 +487,28 @@ jobs:
           # cada uno antes de pasar al espejo siguiente, y la tanda de apt tardó
           # 312 s cuando en el repositorio de al lado, con la misma lista, tardó
           # 28. Con el tiempo corto el salto al otro espejo llega antes.
-          apt=(sudo apt-get -o Acquire::http::Timeout=10 -o Acquire::Retries=3)
-          "${apt[@]}" update
+          apt_opts=(-o Acquire::http::Timeout=10 -o Acquire::Retries=3)
+          # `apt-get update` es lo que se colgó 28 minutos (07/10/2026): una sola
+          # corrida, sin reintento, colgaba el paso entero. Ahora cada intento se
+          # acota con `timeout` —lo normal son 20-40 s— y se reintenta hasta tres
+          # veces, así un espejo que no responde se mata y se vuelve a arrancar en
+          # la misma corrida, en vez de dejar un rojo para relanzar a mano. Si los
+          # tres fallan, el paso corta en rojo igual: la puerta sigue siendo dura.
+          for intento in 1 2 3; do
+            if sudo timeout 120 apt-get "${apt_opts[@]}" update; then
+              break
+            fi
+            echo "::warning::apt-get update se colgó o falló (intento $intento de 3); reintento."
+            if [ "$intento" = 3 ]; then
+              echo "::error::apt-get update no respondió tras tres intentos."
+              exit 1
+            fi
+            sleep 5
+          done
           # Sin comillas a propósito, como el `cargo test` de más abajo: son
           # varios paquetes y tienen que llegar como argumentos separados.
           # shellcheck disable=SC2086
-          "${apt[@]}" install --no-install-recommends --yes $PAQUETES_RUST
+          sudo apt-get "${apt_opts[@]}" install --no-install-recommends --yes $PAQUETES_RUST
 
       # ── El Rust que no se prueba, dicho en voz alta ──────────────────────
       #
