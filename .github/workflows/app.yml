@@ -101,6 +101,15 @@ on:
           que quede en cero lo enciende.
         type: boolean
         default: false
+      clippy_corta:
+        description: >
+          Si un aviso de `cargo clippy` sobre los crates de `pruebas_rust`
+          corta la corrida en vez de sólo avisar. Empieza en falso por lo mismo
+          que las anteriores: encenderlo para todos frenaría el próximo PR de
+          cada repositorio que hoy tiene avisos. Cada repositorio que quede en
+          cero lo enciende, y así no vuelve a juntarlos (Vasak-OS/.github#33).
+        type: boolean
+        default: false
     secrets:
       SONAR_TOKEN:
         description: >
@@ -714,6 +723,56 @@ jobs:
       # arriba lo borra cuando no es una medición, y entonces no hay nada que
       # pasar —ni la propiedad, que `sonar` pone sólo si lo recibe—. Un día
       # de retención alcanza: lo lee el trabajo de al lado, minutos después.
+      # ── Los avisos de clippy ──────────────────────────────────────────────
+      #
+      # Sobre los mismos crates que las pruebas y no sobre el workspace entero,
+      # por la misma razón que `pruebas_rust` se pide crate por crate: un crate
+      # de Tauri arrastraría webkit2gtk y medio escritorio por apt. Reusa la
+      # caché y las dependencias de sistema del paso anterior, así que lo que
+      # agrega es el análisis, no otra compilación de las dependencias.
+      #
+      # Avisa y no corta hasta que el repositorio pida `clippy_corta`. Hasta
+      # acá clippy sólo lo corría `check-all.sh` de PKGBUILDS, y sólo sobre
+      # `src-tauri/`: un servicio de Rust podía juntar avisos sin que nada lo
+      # dijera (vasak-preload llegó a 39).
+      #
+      # Ojo: clippy suma lints con cada versión de Rust, y el toolchain es el
+      # stable del día. Un repositorio con `clippy_corta` puede ponerse rojo sin
+      # haber cambiado nada; se corrige al pasar, igual que un aviso nuevo de
+      # RustSec en `seguridad`.
+      - name: Los avisos de clippy
+        if: ${{ !cancelled() && inputs.pruebas_rust != '' }}
+        env:
+          PRUEBAS_RUST: ${{ inputs.pruebas_rust }}
+          CORTA: ${{ inputs.clippy_corta }}
+        run: |
+          set -uo pipefail
+
+          # El toolchain se instala con `--profile minimal`, que no trae
+          # clippy: se suma acá para no cobrárselo a los repos que no lo corren.
+          if ! rustup component add clippy; then
+            echo "::error::No se pudo instalar clippy; el paso no llegó a mirar nada."
+            exit 1
+          fi
+
+          dir=.
+          [ -f src-tauri/Cargo.toml ] && [ ! -f Cargo.toml ] && dir=src-tauri
+          cd "$dir"
+
+          # Con `--all-targets`, a diferencia de las pruebas: los avisos en las
+          # pruebas también son código que alguien va a leer. Sin comillas en
+          # `$PRUEBAS_RUST`, como en el paso anterior.
+          # shellcheck disable=SC2086
+          if cargo clippy --locked $PRUEBAS_RUST --all-targets -- -D warnings; then
+            echo "Sin avisos de clippy en: $PRUEBAS_RUST."
+            exit 0
+          fi
+          if [ "$CORTA" = "true" ]; then
+            echo "::error::clippy encontró avisos. El detalle está arriba."
+            exit 1
+          fi
+          echo "::warning::clippy encontró avisos. Por ahora sólo avisa: el detalle está en el log de «revisar». Cuando el repositorio quede en cero, se enciende «clippy_corta»."
+
       - name: Pasar la cobertura de Rust a «sonar»
         if: ${{ !cancelled() && inputs.pruebas_rust != '' && hashFiles('coverage/rust.lcov') != '' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
