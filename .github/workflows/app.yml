@@ -558,6 +558,12 @@ jobs:
         with:
           workspaces: ${{ hashFiles('Cargo.toml') == '' && hashFiles('src-tauri/Cargo.toml') != '' && 'src-tauri' || '.' }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
+          # La clave de rust-cache lleva el triple del host (`...-linux-gnu`) y
+          # `runner.os` (`Linux`), pero no la versión de la imagen: una caché de
+          # `target/` guardada en una imagen de Ubuntu se restauraría en otra, con
+          # sus objetos enlazados contra otra glib. Partir por `ImageOS` evita que
+          # una caché vieja de ubuntu-26.04 caiga sobre el runner fijado a 24.04.
+          key: ${{ env.ImageOS }}
 
       - name: Pruebas de Rust
         if: ${{ !cancelled() && inputs.pruebas_rust != '' }}
