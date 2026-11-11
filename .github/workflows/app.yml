@@ -113,7 +113,7 @@ on:
 
 jobs:
   revisar:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Lo único que hace esto es leer el repositorio: clona, instala
     # dependencias y corre comprobaciones. No comenta, no etiqueta, no publica.
     #
@@ -558,6 +558,15 @@ jobs:
         with:
           workspaces: ${{ hashFiles('Cargo.toml') == '' && hashFiles('src-tauri/Cargo.toml') != '' && 'src-tauri' || '.' }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
+          # La clave de rust-cache lleva el triple del host (`...-linux-gnu`) y
+          # `runner.os` (`Linux`), pero no la versión de la imagen: una caché de
+          # `target/` guardada en una imagen de Ubuntu se restauraría en otra, con
+          # sus objetos enlazados contra otra glib. Se parte por la imagen fijada
+          # para que una caché vieja de ubuntu-26.04 no caiga sobre el runner de
+          # 24.04. Literal y no `env.ImageOS`: el contexto `env` sólo trae lo que
+          # declara el workflow, no las variables que hereda del runner, así que
+          # `${{ env.ImageOS }}` sería vacío. Al mover el runner, mover también esto.
+          key: ubuntu-24.04
 
       - name: Pruebas de Rust
         if: ${{ !cancelled() && inputs.pruebas_rust != '' }}
@@ -731,7 +740,7 @@ jobs:
   # los merges de la organización. Dos, que corre en paralelo y no le suma
   # minutos a la revisión.
   seguridad:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     steps:
@@ -884,7 +893,7 @@ jobs:
     # saltea es que se cancele la corrida.
     needs: revisar
     if: ${{ !cancelled() }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     steps:
