@@ -561,9 +561,12 @@ jobs:
           # La clave de rust-cache lleva el triple del host (`...-linux-gnu`) y
           # `runner.os` (`Linux`), pero no la versión de la imagen: una caché de
           # `target/` guardada en una imagen de Ubuntu se restauraría en otra, con
-          # sus objetos enlazados contra otra glib. Partir por `ImageOS` evita que
-          # una caché vieja de ubuntu-26.04 caiga sobre el runner fijado a 24.04.
-          key: ${{ env.ImageOS }}
+          # sus objetos enlazados contra otra glib. Se parte por la imagen fijada
+          # para que una caché vieja de ubuntu-26.04 no caiga sobre el runner de
+          # 24.04. Literal y no `env.ImageOS`: el contexto `env` sólo trae lo que
+          # declara el workflow, no las variables que hereda del runner, así que
+          # `${{ env.ImageOS }}` sería vacío. Al mover el runner, mover también esto.
+          key: ubuntu-24.04
 
       - name: Pruebas de Rust
         if: ${{ !cancelled() && inputs.pruebas_rust != '' }}
