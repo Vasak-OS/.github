@@ -1,0 +1,123 @@
+# La publicación a crates.io de un crate de protocolo, compartida por los repos
+# que exponen uno (vasak-connect, vasak-health-service, vasak-assistant).
+#
+# ── Por qué no reusa `publicar-plugin.yml` ──────────────────────────────────
+#
+# Aquél lee el manifiesto y exige que el workspace declare **un solo** paquete:
+# un plugin es un crate suelto. Un repo de protocolo es un workspace con dos
+# miembros —el `protocol` que se publica y el `daemon` que no—, así que aquella
+# comprobación lo cortaría. Acá se nombra el crate por `inputs.crate` y se
+# publica ése con `-p`.
+#
+# ── Mismo gesto que dispara, misma idempotencia ─────────────────────────────
+#
+# Como el de los plugins: no se dispara con un release (un disparador que depende
+# de una ceremonia aparte un día no se usa), sino cuando la versión del
+# manifiesto no está en el registro. Se consulta antes de subir, se saltea si ya
+# está, y «esa versión ya existe» se trata como éxito: de crates.io no se borra
+# una versión, sólo se retira, así que reintentar tiene que ser barato.
+
+name: Publicar el protocolo
+
+on:
+  workflow_call:
+    inputs:
+      crate:
+        description: El crate de protocolo a publicar (p. ej. vasak-health-protocol).
+        required: true
+        type: string
+    secrets:
+      CARGO_REGISTRY_TOKEN:
+        description: Token de crates.io. Sin él, el trabajo se saltea con aviso.
+        required: false
+
+# Dos corridas del mismo repositorio verían las dos que falta la misma versión.
+# No se cancela la que está en curso: cortar a mitad de un `publish` deja el
+# registro en un estado que no eligió nadie.
+concurrency:
+  group: publicar-protocolo-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  crates:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          # Abajo corre `cargo metadata`, que ejecuta build scripts; un trabajo
+          # que sólo lee no tiene por qué dejar la credencial del checkout a mano.
+          persist-credentials: false
+
+      - name: Versión del crate en el manifiesto
+        id: ver
+        env:
+          CRATE: ${{ inputs.crate }}
+        run: |
+          # `cargo metadata` y no `grep`: la versión es `version.workspace = true`
+          # en el manifiesto del protocolo, que un grep lee vacío, y cargo tiene
+          # el número heredado. `--no-deps` lo limita a los miembros del
+          # workspace, así que no compila nada.
+          version=$(cargo metadata --no-deps --format-version 1 \
+            | jq -r --arg n "$CRATE" '.packages[] | select(.name == $n) | .version')
+          if [ -z "$version" ]; then
+            echo "::error::El workspace no declara ningún crate «$CRATE». No se publica nada."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Crate: $CRATE $version"
+
+      - name: ¿Falta esta versión en crates.io?
+        id: consulta
+        env:
+          NOMBRE: ${{ inputs.crate }}
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          # crates.io rechaza los pedidos sin `User-Agent` con un 403, que sin
+          # esto se leería como «la versión no está» y llevaría a subir de nuevo
+          # algo ya publicado.
+          codigo=$(curl -s -o /dev/null -w '%{http_code}' \
+            -H 'User-Agent: Vasak-OS publicar-protocolo (github.com/Vasak-OS)' \
+            "https://crates.io/api/v1/crates/$NOMBRE/$VERSION")
+          case "$codigo" in
+            200) echo "falta=no" >> "$GITHUB_OUTPUT"
+                 echo "$NOMBRE $VERSION ya está en crates.io." ;;
+            404) echo "falta=sí" >> "$GITHUB_OUTPUT"
+                 echo "$NOMBRE $VERSION no está: se publica." ;;
+            *)   echo "::error::crates.io contestó $codigo al preguntar por $NOMBRE $VERSION. No se publica a ciegas."
+                 exit 1 ;;
+          esac
+
+      - name: Publicar en crates.io
+        id: subir
+        if: steps.consulta.outputs.falta == 'sí'
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CRATE: ${{ inputs.crate }}
+        run: |
+          if [ -z "$CARGO_REGISTRY_TOKEN" ]; then
+            echo "::warning::Falta el secreto CARGO_REGISTRY_TOKEN: el protocolo queda sin publicar."
+            exit 0
+          fi
+
+          # `--no-verify`: la compilación ya la hizo el flujo de chequeos sobre
+          # este mismo commit, y re-verificar acá arrastraría el resto del
+          # workspace. Se publica sólo el crate del protocolo con `-p`.
+          salida=$(cargo publish -p "$CRATE" --no-verify 2>&1) && estado=0 || estado=$?
+          printf '%s\n' "$salida"
+
+          if [ "$estado" = "0" ]; then
+            echo "::notice::$CRATE publicado."
+            exit 0
+          fi
+
+          # Entre la consulta y esto hay una ventana: que ya exista significa que
+          # otra corrida llegó primero con la misma versión. Es el estado que se
+          # quería, no un error.
+          if printf '%s' "$salida" | grep -qi "already .*uploaded\|already exists"; then
+            echo "::notice::Otra corrida publicó esta versión primero."
+            exit 0
+          fi
+
+          exit "$estado"
