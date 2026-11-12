@@ -101,6 +101,16 @@ on:
           que quede en cero lo enciende.
         type: boolean
         default: false
+      clippy_corta:
+        description: >
+          Si los avisos de `cargo clippy` cortan la corrida en vez de sólo
+          avisar. Empieza en falso por lo mismo que las otras tres: encenderla
+          para los cuarenta y dos repositorios que llaman a `app.yml`
+          bloquearía el próximo PR de todos los que hoy tienen avisos. Cada
+          repositorio que llega a cero lo enciende; `vasak-preload` ya está en
+          cero y puede ser el primero.
+        type: boolean
+        default: false
     secrets:
       SONAR_TOKEN:
         description: >
@@ -731,6 +741,61 @@ jobs:
           path: coverage/rust.lcov
           retention-days: 1
           if-no-files-found: ignore
+
+      # ── Los avisos de clippy ─────────────────────────────────────────────
+      #
+      # Sobre los mismos crates que `pruebas_rust`, y por el mismo motivo por el
+      # que las pruebas se piden crate por crate: no arrastrar el crate de Tauri
+      # ni webkit2gtk por apt. Sin `pruebas_rust` no corre —igual que las
+      # pruebas—, y el aviso de «este repositorio tiene Rust y no pasa
+      # pruebas_rust» de más arriba ya cubre ese caso.
+      #
+      # Apagado (`clippy_corta` en falso, por omisión) saca los avisos como
+      # `::warning::` y sigue; encendido, `-D warnings` hace fallar el paso.
+      # Empieza apagado por lo mismo que las otras tres puertas.
+      #
+      # Es una segunda compilación de los mismos crates que las pruebas: clippy
+      # no reusa el artefacto de `cargo test`. En un repositorio grande conviene
+      # medir cuánto suma. Se queda en el toolchain `stable`, como el resto del
+      # Rust de acá; un repositorio con `clippy_corta` encendido puede ponerse
+      # rojo cuando el runner sube de versión de Rust y clippy trae lints nuevos.
+      - name: Los avisos de clippy
+        if: ${{ !cancelled() && inputs.pruebas_rust != '' }}
+        # Por variable de entorno y no con `${{ }}` dentro del script, igual que
+        # las pruebas: la plantilla se pega como texto antes de correr.
+        env:
+          PRUEBAS_RUST: ${{ inputs.pruebas_rust }}
+          CORTA: ${{ inputs.clippy_corta }}
+        run: |
+          set -uo pipefail
+
+          # El componente no viene en la instalación por omisión del toolchain;
+          # se agrega acá, como `llvm-tools-preview` para la cobertura. Si no se
+          # puede instalar, el paso avisa y no corre en vez de salir rojo.
+          if ! rustup component add clippy; then
+            echo "::warning::No se pudo instalar clippy; este paso no corrió."
+            exit 0
+          fi
+
+          dir=.
+          [ -f src-tauri/Cargo.toml ] && [ ! -f Cargo.toml ] && dir=src-tauri
+          cd "$dir"
+
+          # `--all-targets` a propósito, al revés que las pruebas: los avisos de
+          # clippy en las pruebas y los ejemplos también cuentan. `-D warnings`
+          # sube cada aviso a error, y es lo que decide el color del paso.
+          #
+          # Sin comillas en `$PRUEBAS_RUST`, igual que en las pruebas: son
+          # varios `-p crate` que tienen que llegar como argumentos separados.
+          # shellcheck disable=SC2086
+          if cargo clippy --locked --all-targets $PRUEBAS_RUST -- -D warnings; then
+            echo "clippy no tiene avisos."
+          elif [ "$CORTA" = true ]; then
+            echo "::error::clippy tiene avisos y «clippy_corta» está encendido."
+            exit 1
+          else
+            echo "::warning::clippy tiene avisos; por ahora sólo avisa. El detalle está en el log de este paso."
+          fi
 
   # ── Seguridad: las dependencias y los propios workflows ──────────────────
   #
