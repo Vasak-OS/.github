@@ -195,7 +195,7 @@ class SonarJobTest(unittest.TestCase):
         text = WORKFLOW.read_text()
         job = text[: text.index("\n  seguridad:\n")]
         guards = [l.strip() for l in job.splitlines() if "inputs.pruebas_rust != ''" in l and l.strip().startswith("if:")]
-        self.assertEqual(len(guards), 4, guards)
+        self.assertEqual(len(guards), 5, guards)
         for guard in guards:
             self.assertIn("!cancelled()", guard)
 
