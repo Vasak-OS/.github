@@ -1110,6 +1110,18 @@ jobs:
           # cualquier crate `pam_*`, que es donde vive esa capa. Misma decisión
           # que los `commands.rs`.
           #
+          # Y el arranque de las aplicaciones Tauri, por lo mismo. En Tauri 2 el
+          # `main.rs` sólo llama a `run()`, que vive en `src-tauri/src/lib.rs`:
+          # ahí se arma el `Builder`, se registran los comandos con
+          # `generate_handler!` y se levantan ventanas y bandeja. Esas líneas
+          # —cada comando del handler, el `setup`, el `.run()`— no las mueve
+          # ninguna prueba unitaria sin levantar la app entera, que en CI no se
+          # hace. Medir esa capa sólo frena el PR que agrega o renombra un
+          # comando. `**/src-tauri/src/main.rs` ya estaba; `**/src-tauri/src/lib.rs`
+          # es el mismo arranque del otro lado del `main.rs`. Misma decisión que
+          # los `commands.rs`, y acotada a `src-tauri/` para no tocar el `lib.rs`
+          # de los servicios ni de los plugins, que sí es código con lógica.
+          #
           # La propiedad es por lenguaje: `sonar.rust.lcov.reportPaths` para
           # Rust, y un lcov de Rust puesto en el sensor de JavaScript no se
           # importa. Los otros dos nombres que quedan a mano no existen:
@@ -1153,6 +1165,6 @@ jobs:
             -Dsonar.exclusions=**/node_modules/**,**/target/**,**/dist/**,**/coverage/**,src-tauri/gen/**,**/tests/**,**/*.test.*,**/*.spec.*
             -Dsonar.test.inclusions=**/tests/**,**/test/**,**/pruebas/**,**/*.test.*,**/*.spec.*,**/tests.rs,**/*_test.rs
             -Dsonar.test.exclusions=**/node_modules/**,**/target/**,**/dist/**
-            -Dsonar.coverage.exclusions=**/*.vue,**/commands.rs,**/commands/*.rs,**/pam_*/src/lib.rs,**/clipboard/watcher.rs,**/clipboard/source.rs,**/clipboard/globals.rs,**/windows_apps/clipboard.rs,**/channel/mod.rs,**/channel/identity.rs,**/channel/transport.rs,**/src-tauri/src/main.rs
+            -Dsonar.coverage.exclusions=**/*.vue,**/commands.rs,**/commands/*.rs,**/pam_*/src/lib.rs,**/clipboard/watcher.rs,**/clipboard/source.rs,**/clipboard/globals.rs,**/windows_apps/clipboard.rs,**/channel/mod.rs,**/channel/identity.rs,**/channel/transport.rs,**/src-tauri/src/main.rs,**/src-tauri/src/lib.rs
             -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
             ${{ steps.cobertura_rust.outputs.propiedad }}
