@@ -1170,6 +1170,15 @@ jobs:
           # Y el efecto no era sólo de conteo: sin archivos, el sensor de Rust
           # ni siquiera arrancaba, y la cobertura de Rust que sube el paso de
           # más arriba no tenía contra qué adjuntarse.
+          #
+          # `cpd.exclusions` saca los archivos de prueba de Rust del detector de
+          # copias, y nada más (siguen contando para cobertura y bugs). Como
+          # `sonar.tests` se quitó (arriba), todo archivo es código de producción
+          # para Sonar, así que un `*_tests.rs` —el nombre de todas las pruebas
+          # del taller— cuenta su andamiaje repetido como duplicación de código
+          # nuevo y traba la puerta. El andamiaje de una prueba se repite a
+          # propósito; no es deuda. Se nombran las tres formas (`tests.rs`,
+          # `*_test.rs`, `*_tests.rs`) para no depender de una convención.
           args: >
             -Dsonar.organization=vasakos
             -Dsonar.projectKey=Vasak-OS_${{ github.event.repository.name }}
@@ -1177,5 +1186,6 @@ jobs:
             -Dsonar.test.inclusions=**/tests/**,**/test/**,**/pruebas/**,**/*.test.*,**/*.spec.*,**/tests.rs,**/*_test.rs
             -Dsonar.test.exclusions=**/node_modules/**,**/target/**,**/dist/**
             -Dsonar.coverage.exclusions=**/*.vue,**/commands.rs,**/commands/*.rs,**/pam_*/src/lib.rs,**/clipboard/watcher.rs,**/clipboard/source.rs,**/clipboard/globals.rs,**/windows_apps/clipboard.rs,**/windows_apps/control_center.rs,**/channel/mod.rs,**/channel/identity.rs,**/channel/transport.rs,**/src-tauri/src/main.rs,**/src-tauri/src/lib.rs,**/src-tauri/src/desbloqueo.rs
+            -Dsonar.cpd.exclusions=**/tests.rs,**/*_test.rs,**/*_tests.rs
             -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
             ${{ steps.cobertura_rust.outputs.propiedad }}
