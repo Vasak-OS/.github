@@ -1122,6 +1122,17 @@ jobs:
           # los `commands.rs`, y acotada a `src-tauri/` para no tocar el `lib.rs`
           # de los servicios ni de los plugins, que sí es código con lógica.
           #
+          # Y el driver del diálogo de desbloqueo de `polkit-vasak`,
+          # `desbloqueo.rs`, por lo mismo que el `lib.rs` del arranque: maneja la
+          # ventana residente (mostrar, esconder, recargar su webview) y habla
+          # D-Bus con udisks y logind. Esas líneas —`show`/`hide` de la ventana,
+          # el registro ante logind, la vuelta del pedido— no las mueve ninguna
+          # prueba sin un bus de sesión y un display reales, que en CI no hay. El
+          # registro de diálogos pendientes que vive en el mismo archivo sí es
+          # lógica y conserva sus pruebas unitarias en la suite; medir el archivo
+          # sólo frena el PR que toca el driver. `**/src-tauri/src/desbloqueo.rs`
+          # atrapa sólo ese archivo. Misma decisión que los `commands.rs`.
+          #
           # La propiedad es por lenguaje: `sonar.rust.lcov.reportPaths` para
           # Rust, y un lcov de Rust puesto en el sensor de JavaScript no se
           # importa. Los otros dos nombres que quedan a mano no existen:
@@ -1165,6 +1176,6 @@ jobs:
             -Dsonar.exclusions=**/node_modules/**,**/target/**,**/dist/**,**/coverage/**,src-tauri/gen/**,**/tests/**,**/*.test.*,**/*.spec.*
             -Dsonar.test.inclusions=**/tests/**,**/test/**,**/pruebas/**,**/*.test.*,**/*.spec.*,**/tests.rs,**/*_test.rs
             -Dsonar.test.exclusions=**/node_modules/**,**/target/**,**/dist/**
-            -Dsonar.coverage.exclusions=**/*.vue,**/commands.rs,**/commands/*.rs,**/pam_*/src/lib.rs,**/clipboard/watcher.rs,**/clipboard/source.rs,**/clipboard/globals.rs,**/windows_apps/clipboard.rs,**/windows_apps/control_center.rs,**/channel/mod.rs,**/channel/identity.rs,**/channel/transport.rs,**/src-tauri/src/main.rs,**/src-tauri/src/lib.rs
+            -Dsonar.coverage.exclusions=**/*.vue,**/commands.rs,**/commands/*.rs,**/pam_*/src/lib.rs,**/clipboard/watcher.rs,**/clipboard/source.rs,**/clipboard/globals.rs,**/windows_apps/clipboard.rs,**/windows_apps/control_center.rs,**/channel/mod.rs,**/channel/identity.rs,**/channel/transport.rs,**/src-tauri/src/main.rs,**/src-tauri/src/lib.rs,**/src-tauri/src/desbloqueo.rs
             -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
             ${{ steps.cobertura_rust.outputs.propiedad }}
