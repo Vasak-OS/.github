@@ -1144,6 +1144,16 @@ jobs:
           # driver. `**/src-tauri/src/dialog.rs` atrapa sólo ese archivo (es el
           # único `dialog.rs` del taller). Misma decisión que los `commands.rs`.
           #
+          # Y la superficie de chat de Lince en `vasak-desktop`, por lo mismo.
+          # `windows_apps/assistant.rs` es glue de capa (crear/mostrar/esconder la
+          # ventana GTK), como `control_center.rs` y `shell_layer.rs` que ya están
+          # excluidos. `src-tauri/src/assistant.rs` es el cliente D-Bus del
+          # asistente: envoltorios finos de `invoke`/`call` por el bus y el gateo
+          # de apertura, que no se mueven sin un bus vivo. Lo que sí es lógica
+          # —los tipos del cable, `available_from_file_state` y la guarda de
+          # firmas— conserva sus pruebas en la suite; medir el archivo sólo frena
+          # el PR que toca el cliente. Misma decisión que los `commands.rs`.
+          #
           # La propiedad es por lenguaje: `sonar.rust.lcov.reportPaths` para
           # Rust, y un lcov de Rust puesto en el sensor de JavaScript no se
           # importa. Los otros dos nombres que quedan a mano no existen:
@@ -1196,7 +1206,7 @@ jobs:
             -Dsonar.exclusions=**/node_modules/**,**/target/**,**/dist/**,**/coverage/**,src-tauri/gen/**,**/tests/**,**/*.test.*,**/*.spec.*
             -Dsonar.test.inclusions=**/tests/**,**/test/**,**/pruebas/**,**/*.test.*,**/*.spec.*,**/tests.rs,**/*_test.rs
             -Dsonar.test.exclusions=**/node_modules/**,**/target/**,**/dist/**
-            -Dsonar.coverage.exclusions=**/*.vue,**/commands.rs,**/commands/*.rs,**/pam_*/src/lib.rs,**/clipboard/watcher.rs,**/clipboard/source.rs,**/clipboard/globals.rs,**/windows_apps/clipboard.rs,**/windows_apps/control_center.rs,**/windows_apps/shell_layer.rs,**/windows_apps/anchored_applet.rs,**/channel/mod.rs,**/channel/identity.rs,**/channel/transport.rs,**/src-tauri/src/main.rs,**/src-tauri/src/lib.rs,**/src-tauri/src/lock/mod.rs,**/src-tauri/src/desbloqueo.rs,**/src-tauri/src/dialog.rs
+            -Dsonar.coverage.exclusions=**/*.vue,**/commands.rs,**/commands/*.rs,**/pam_*/src/lib.rs,**/clipboard/watcher.rs,**/clipboard/source.rs,**/clipboard/globals.rs,**/windows_apps/clipboard.rs,**/windows_apps/control_center.rs,**/windows_apps/shell_layer.rs,**/windows_apps/anchored_applet.rs,**/windows_apps/assistant.rs,**/src-tauri/src/assistant.rs,**/channel/mod.rs,**/channel/identity.rs,**/channel/transport.rs,**/src-tauri/src/main.rs,**/src-tauri/src/lib.rs,**/src-tauri/src/lock/mod.rs,**/src-tauri/src/desbloqueo.rs,**/src-tauri/src/dialog.rs
             -Dsonar.cpd.exclusions=**/tests.rs,**/*_test.rs,**/*_tests.rs
             -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
             ${{ steps.cobertura_rust.outputs.propiedad }}
